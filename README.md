@@ -13,21 +13,25 @@ The next scenario will extend the experiment with a water basin and barrier, con
 ## Technology
 
 - TypeScript + Vite
-- ArcGIS Maps SDK for JavaScript
-- Three.js / WebGL
+- ArcGIS Maps SDK for JavaScript 5.1
+- Three.js geometry and matrix utilities
+- ArcGIS RenderNode / WebGL2
 - Rapier 3D (WASM)
 
 ## Milestones
 
-1. **ArcGIS bootstrap** — SceneView, world elevation and terrain interaction.
-2. **Rockfall physics** — terrain sampling, local heightfield, rigid-body boulder and trajectory.
-3. **Water impact** — GPU height-field water simulation and impact impulse.
-4. **Barrier / overtopping** — simplified overflow propagation.
-5. **GIS outputs** — trajectories, impact energy and hazard surfaces.
+1. **ArcGIS bootstrap** — SceneView, world elevation and terrain interaction. ✅
+2. **Georeferenced WebGL rock** — Three.js boulder geometry rendered through ArcGIS RenderNode. 🚧
+3. **Rockfall physics** — terrain sampling, local heightfield, Rapier rigid body and trajectory.
+4. **Water impact** — GPU height-field water simulation and impact impulse.
+5. **Barrier / overtopping** — simplified overflow propagation.
+6. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
-The current bootstrap opens a 3D ArcGIS scene and lets you click the terrain to place a candidate rock-release point.
+Click anywhere on the 3D terrain. GeoDynamics creates an irregular Three.js boulder in local metric coordinates and places it in the ArcGIS render coordinate system through a custom `RenderNode`.
+
+The custom object is rendered into the `opaque-color` stage so it shares the SceneView depth buffer instead of being drawn as a disconnected HTML/WebGL overlay.
 
 ## Run locally
 
@@ -47,15 +51,30 @@ npm run build
 ```text
 src/
   arcgis/       ArcGIS SceneView, terrain and geographic coordinates
-  rendering/    Three.js / custom WebGL integration
+  rendering/    Three.js geometry + ArcGIS RenderNode integration
   physics/      Rapier rigid bodies and terrain collision
   simulation/   Scenario orchestration
   ui/           Controls and telemetry
 ```
 
+## Rendering architecture
+
+```text
+ArcGIS SceneView
+      |
+      +-- world-elevation
+      |
+      +-- RenderNode (opaque-color)
+              |
+              +-- ArcGIS render-coordinate transform
+              +-- Three.js IcosahedronGeometry
+              +-- custom WebGL2 shader
+              +-- shared SceneView depth buffer
+```
+
 ## Status
 
-Experimental. The project intentionally starts with a small vertical slice before introducing custom WebGL rendering and physics.
+Experimental. `RenderNode` is an expert-level ArcGIS API and is intentionally isolated in the rendering module.
 
 ## License
 

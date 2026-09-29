@@ -1,7 +1,8 @@
 import Map from "@arcgis/core/Map";
-import SceneView from "@arcgis/core/views/SceneView";
-import Graphic from "@arcgis/core/Graphic";
 import Point from "@arcgis/core/geometry/Point";
+import SceneView from "@arcgis/core/views/SceneView";
+
+import { createRockRenderNode } from "../rendering/RockRenderNode";
 
 export async function createScene(container: string): Promise<SceneView> {
   const map = new Map({
@@ -30,31 +31,20 @@ export async function createScene(container: string): Promise<SceneView> {
 
   await view.when();
 
+  const rockNode = createRockRenderNode(view);
   const status = document.querySelector<HTMLDivElement>("#status");
 
-  view.on("click", async (event) => {
+  view.on("click", (event) => {
     const point = view.toMap({ x: event.x, y: event.y }) as Point | null;
-    if (!point) return;
+    if (!point) {
+      return;
+    }
 
-    view.graphics.removeAll();
-    view.graphics.add(new Graphic({
-      geometry: point,
-      symbol: {
-        type: "point-3d",
-        symbolLayers: [{
-          type: "object",
-          resource: { primitive: "sphere" },
-          material: { color: "#ff6b35" },
-          width: 18,
-          height: 18,
-          depth: 18
-        }]
-      } as __esri.PointSymbol3DProperties
-    }));
+    rockNode.setRock(point);
 
     if (status) {
       status.textContent =
-        `Release point: ${point.latitude?.toFixed(5)}, ${point.longitude?.toFixed(5)} — physics coming next.`;
+        `Three.js rock: ${point.latitude?.toFixed(5)}, ${point.longitude?.toFixed(5)}, z ${point.z?.toFixed(1) ?? "n/a"} m`;
     }
   });
 
