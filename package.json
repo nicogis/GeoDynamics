@@ -1,7 +1,7 @@
 {
   "name": "geodynamics",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,11 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@arcgis/core": "^4.33.12",
+    "@arcgis/core": "^5.1.26",
     "@dimforge/rapier3d-compat": "^0.19.0",
     "three": "^0.180.0"
   },
   "devDependencies": {
+    "@types/three": "^0.180.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.7"
   }
