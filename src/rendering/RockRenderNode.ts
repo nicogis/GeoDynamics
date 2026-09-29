@@ -147,7 +147,7 @@ const RockRenderNodeClass = RenderNode.createSubclass({
       position,
       point.spatialReference,
       new Float64Array(16)
-    );
+    ) ?? null;
 
     this.requestRender();
   },
