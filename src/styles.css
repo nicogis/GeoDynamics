@@ -14,7 +14,7 @@ body {
 .panel {
   position: absolute;
   top: 24px;
-  left: 24px;
+  right: 24px;
   width: min(360px, calc(100vw - 80px));
   padding: 20px 22px;
   color: #f6f7f8;
@@ -48,4 +48,18 @@ body {
   padding-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .panel {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    padding: 16px 18px;
+  }
+
+  .panel h1 {
+    font-size: 24px;
+  }
 }
