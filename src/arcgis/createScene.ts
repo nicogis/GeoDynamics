@@ -3,6 +3,7 @@ import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 
 import { createRockRenderNode } from "../rendering/RockRenderNode";
+import { RockfallSimulation } from "../simulation/RockfallSimulation";
 
 export async function createScene(container: string): Promise<SceneView> {
   const map = new Map({
@@ -33,6 +34,13 @@ export async function createScene(container: string): Promise<SceneView> {
 
   const rockNode = createRockRenderNode(view);
   const status = document.querySelector<HTMLDivElement>("#status");
+  const writeStatus = (message: string) => {
+    if (status) {
+      status.textContent = message;
+    }
+  };
+
+  const simulation = new RockfallSimulation(view, rockNode, writeStatus);
 
   view.on("click", (event) => {
     const point = view.toMap({ x: event.x, y: event.y }) as Point | null;
@@ -40,12 +48,15 @@ export async function createScene(container: string): Promise<SceneView> {
       return;
     }
 
-    rockNode.setRock(point);
+    void simulation.release(point).catch((error: unknown) => {
+      console.error("Rockfall simulation failed:", error);
 
-    if (status) {
-      status.textContent =
-        `Three.js rock: ${point.latitude?.toFixed(5)}, ${point.longitude?.toFixed(5)}, z ${point.z?.toFixed(1) ?? "n/a"} m`;
-    }
+      writeStatus(
+        error instanceof Error
+          ? `Simulation error: ${error.message}`
+          : "Simulation error. See the browser console for details."
+      );
+    });
   });
 
   return view;

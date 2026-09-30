@@ -21,17 +21,24 @@ The next scenario will extend the experiment with a water basin and barrier, con
 ## Milestones
 
 1. **ArcGIS bootstrap** — SceneView, world elevation and terrain interaction. ✅
-2. **Georeferenced WebGL rock** — Three.js boulder geometry rendered through ArcGIS RenderNode. 🚧
-3. **Rockfall physics** — terrain sampling, local heightfield, Rapier rigid body and trajectory.
-4. **Water impact** — GPU height-field water simulation and impact impulse.
-5. **Barrier / overtopping** — simplified overflow propagation.
-6. **GIS outputs** — trajectories, impact energy and hazard surfaces.
+2. **Georeferenced WebGL rock** — Three.js boulder geometry rendered through ArcGIS RenderNode. ✅
+3. **Rockfall physics** — ArcGIS terrain sampling, Rapier heightfield, rigid body and rotation. 🚧
+4. **Trajectory GIS output** — path, speed and impact-energy graphics.
+5. **Water impact** — GPU height-field water simulation and impact impulse.
+6. **Barrier / overtopping** — simplified overflow propagation.
+7. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
-Click anywhere on the 3D terrain. GeoDynamics creates an irregular Three.js boulder in local metric coordinates and places it in the ArcGIS render coordinate system through a custom `RenderNode`.
+Click a point on the 3D terrain. GeoDynamics samples a 900 × 900 metre grid from ArcGIS World Elevation, converts it into a local Rapier heightfield, creates a dynamic spherical collider for the boulder and advances the simulation at a fixed 60 Hz.
 
-The custom object is rendered into the `opaque-color` stage so it shares the SceneView depth buffer instead of being drawn as a disconnected HTML/WebGL overlay.
+The physical coordinate system is intentionally local:
+
+- Rapier X = east
+- Rapier Y = elevation / up
+- Rapier Z = north
+
+Every physics frame is converted back into ArcGIS map coordinates and then into the SceneView render coordinate system. The boulder's Rapier quaternion is applied to the Three.js-generated geometry before the custom RenderNode draws it.
 
 ## Run locally
 
@@ -46,35 +53,50 @@ Production build:
 npm run build
 ```
 
+The Vite build uses relative asset URLs and copies `public/web.config` into `dist`, so the output can be deployed directly to an IIS application or virtual directory.
+
 ## Project structure
 
 ```text
 src/
-  arcgis/       ArcGIS SceneView, terrain and geographic coordinates
+  arcgis/       ArcGIS SceneView and geographic interaction
   rendering/    Three.js geometry + ArcGIS RenderNode integration
-  physics/      Rapier rigid bodies and terrain collision
-  simulation/   Scenario orchestration
+  physics/      ArcGIS elevation sampling / Rapier terrain data
+  simulation/   Rapier world and rockfall orchestration
   ui/           Controls and telemetry
 ```
 
-## Rendering architecture
+## Rockfall architecture
 
 ```text
 ArcGIS SceneView
       |
-      +-- world-elevation
+      +-- click release point
       |
-      +-- RenderNode (opaque-color)
+      +-- Ground.queryElevation(Multipoint)
+      |       |
+      |       +-- 41 × 41 DEM samples
+      |       +-- local heightfield
+      |
+      +-- Rapier World
+      |       |
+      |       +-- static terrain collider
+      |       +-- dynamic boulder collider
+      |       +-- gravity / collision / rotation
+      |
+      +-- RockRenderNode
               |
+              +-- local physics position -> ArcGIS position
+              +-- Rapier quaternion -> local model rotation
               +-- ArcGIS render-coordinate transform
-              +-- Three.js IcosahedronGeometry
-              +-- custom WebGL2 shader
               +-- shared SceneView depth buffer
 ```
 
-## Status
+## Notes
 
-Experimental. `RenderNode` is an expert-level ArcGIS API and is intentionally isolated in the rendering module.
+The current simulation area is intentionally local. This avoids floating-point precision issues that would arise if a physics engine operated directly on global/ECEF coordinates.
+
+`RenderNode` is an experimental expert-level ArcGIS API and is isolated in the rendering module.
 
 ## License
 
