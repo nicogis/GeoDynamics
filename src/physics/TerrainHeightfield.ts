@@ -17,7 +17,7 @@ export async function sampleTerrainMesh(
   view: SceneView,
   center: Point,
   span = 2400,
-  size = 65
+  size = 129
 ): Promise<SampledTerrainMesh> {
   if (!center.spatialReference.isWebMercator) {
     throw new Error("The current POC expects a Web Mercator SceneView.");
