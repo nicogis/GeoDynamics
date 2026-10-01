@@ -26,14 +26,14 @@ The next scenario will extend the experiment with a water basin and barrier, con
 4. **Trajectory GIS output** — long-range path, runout, speed and distance metrics. ✅
 5. **GIS rockfall result** — endpoint, elevation drop, mass and kinetic-energy attributes. ✅
 6. **Higher-fidelity rockfall physics** — 129 × 129 terrain sampling and irregular convex rock collider. ✅
-7. **Water surface base** — animated WebGL water patch seeded at the lowest sampled terrain point. 🚧
+7. **Water surface base** — explicitly placed animated WebGL water patch. 🚧
 8. **Water impact** — GPU height-field water simulation and impact impulse.
 9. **Barrier / overtopping** — simplified overflow propagation.
 10. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
-Click a point on the 3D terrain. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
+Use **Shift + click** to place the water basin, then click normally to release the boulder. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
 
 The physical coordinate system is intentionally local:
 
@@ -97,7 +97,7 @@ ArcGIS SceneView
       |       +-- peak kinetic energy
       |
       +-- WaterRenderNode
-      |       +-- basin seeded at lowest DEM sample
+      |       +-- Shift + click basin placement
       |       +-- animated WebGL water surface
       |
       +-- RockRenderNode
