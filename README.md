@@ -22,15 +22,15 @@ The next scenario will extend the experiment with a water basin and barrier, con
 
 1. **ArcGIS bootstrap** — SceneView, world elevation and terrain interaction. ✅
 2. **Georeferenced WebGL rock** — Three.js boulder geometry rendered through ArcGIS RenderNode. ✅
-3. **Rockfall physics** — ArcGIS terrain sampling, Rapier heightfield, rigid body and rotation. 🚧
-4. **Trajectory GIS output** — path, speed and impact-energy graphics.
+3. **Rockfall physics** — ArcGIS terrain sampling, Rapier triangle-mesh collider, rigid body and rotation. ✅
+4. **Trajectory GIS output** — long-range path, runout, speed and distance metrics. 🚧
 5. **Water impact** — GPU height-field water simulation and impact impulse.
 6. **Barrier / overtopping** — simplified overflow propagation.
 7. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
-Click a point on the 3D terrain. GeoDynamics samples a 900 × 900 metre grid from ArcGIS World Elevation, converts it into a local Rapier heightfield, creates a dynamic spherical collider for the boulder and advances the simulation at a fixed 60 Hz.
+Click a point on the 3D terrain. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic spherical collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry.
 
 The physical coordinate system is intentionally local:
 
@@ -75,14 +75,18 @@ ArcGIS SceneView
       |
       +-- Ground.queryElevation(Multipoint)
       |       |
-      |       +-- 41 × 41 DEM samples
-      |       +-- local heightfield
+      |       +-- 65 × 65 DEM samples
+      |       +-- local triangle mesh
       |
       +-- Rapier World
       |       |
       |       +-- static terrain collider
       |       +-- dynamic boulder collider
       |       +-- gravity / collision / rotation
+      |
+      +-- trajectory GraphicsLayer
+      |       +-- 3D Polyline path
+      |       +-- runout / distance / speed metrics
       |
       +-- RockRenderNode
               |
