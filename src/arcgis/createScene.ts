@@ -146,6 +146,10 @@ export async function createScene(container: string): Promise<SceneView> {
       });
 
       resultLayer.add(resultGraphic);
+    },
+    {
+      getSurface: () => waterNode.getSurface(),
+      addImpact: (point, speed) => waterNode.addImpact(point, speed)
     }
   );
 

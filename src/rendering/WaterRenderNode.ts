@@ -13,12 +13,23 @@ type WaterNodeInternal = RenderNode & {
   projectionLocation: WebGLUniformLocation | null;
   modelViewLocation: WebGLUniformLocation | null;
   timeLocation: WebGLUniformLocation | null;
+  impactCenterLocation: WebGLUniformLocation | null;
+  impactTimeLocation: WebGLUniformLocation | null;
+  impactStrengthLocation: WebGLUniformLocation | null;
   initializedResources: boolean;
   size: number;
+  center: Point | null;
+  surfaceElevation: number | null;
+  impactCenterX: number;
+  impactCenterY: number;
+  impactTime: number;
+  impactStrength: number;
   viewMatrix: Matrix4;
   modelMatrix: Matrix4;
   modelViewMatrix: Matrix4;
   setWater(center: Point, size?: number): void;
+  addImpact(point: Point, speed: number): void;
+  getSurface(): { center: Point; size: number; elevation: number } | null;
   ensureResources(): void;
 };
 
@@ -53,14 +64,23 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
     uniform mat4 uProjection;
     uniform mat4 uModelView;
     uniform float uTime;
+    uniform vec2 uImpactCenter;
+    uniform float uImpactTime;
+    uniform float uImpactStrength;
 
     out float vWave;
 
     void main() {
       vec3 p = aPosition;
       float wave =
-        sin((p.x + uTime * 5.0) * 0.045) * 0.55 +
-        cos((p.y - uTime * 3.2) * 0.038) * 0.35;
+        sin((p.x + uTime * 5.0) * 0.045) * 0.18 +
+        cos((p.y - uTime * 3.2) * 0.038) * 0.12;
+
+      float age = max(0.0, uTime - uImpactTime);
+      float distanceFromImpact = distance(p.xy, uImpactCenter);
+      float envelope = exp(-age * 0.42) * exp(-distanceFromImpact * 0.006);
+      float ripple = sin(distanceFromImpact * 0.16 - age * 10.0);
+      wave += ripple * envelope * uImpactStrength;
 
       p.z += wave;
       vWave = wave;
@@ -119,8 +139,17 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   projectionLocation: null,
   modelViewLocation: null,
   timeLocation: null,
+  impactCenterLocation: null,
+  impactTimeLocation: null,
+  impactStrengthLocation: null,
   initializedResources: false,
   size: 420,
+  center: null,
+  surfaceElevation: null,
+  impactCenterX: 0,
+  impactCenterY: 0,
+  impactTime: -1000,
+  impactStrength: 0,
 
   viewMatrix: new Matrix4(),
   modelMatrix: new Matrix4(),
@@ -133,9 +162,11 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
   setWater(this: WaterNodeInternal, center: Point, size = 420) {
     this.size = size;
+    this.center = center.clone();
+    this.surfaceElevation = (center.z ?? 0) + 4;
 
     const surfacePoint = center.clone();
-    surfacePoint.z = (surfacePoint.z ?? 0) + 4;
+    surfacePoint.z = this.surfaceElevation;
 
     const transform = webgl.renderCoordinateTransformAt(
       this.view,
@@ -146,6 +177,30 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
     this.waterTransform = transform ?? null;
     this.requestRender();
+  },
+
+  addImpact(this: WaterNodeInternal, point: Point, speed: number) {
+    if (!this.center) {
+      return;
+    }
+
+    this.impactCenterX = point.x - this.center.x;
+    this.impactCenterY = point.y - this.center.y;
+    this.impactTime = performance.now() / 1000;
+    this.impactStrength = Math.min(Math.max(speed * 0.18, 1.5), 8);
+    this.requestRender();
+  },
+
+  getSurface(this: WaterNodeInternal) {
+    if (!this.center || this.surfaceElevation === null) {
+      return null;
+    }
+
+    return {
+      center: this.center.clone(),
+      size: this.size,
+      elevation: this.surfaceElevation
+    };
   },
 
   ensureResources(this: WaterNodeInternal) {
@@ -169,6 +224,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.projectionLocation = gl.getUniformLocation(this.program, "uProjection");
     this.modelViewLocation = gl.getUniformLocation(this.program, "uModelView");
     this.timeLocation = gl.getUniformLocation(this.program, "uTime");
+    this.impactCenterLocation = gl.getUniformLocation(this.program, "uImpactCenter");
+    this.impactTimeLocation = gl.getUniformLocation(this.program, "uImpactTime");
+    this.impactStrengthLocation = gl.getUniformLocation(this.program, "uImpactStrength");
 
     this.positionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
@@ -218,7 +276,11 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       false,
       new Float32Array(this.modelViewMatrix.elements)
     );
-    gl.uniform1f(this.timeLocation, performance.now() / 1000);
+    const now = performance.now() / 1000;
+    gl.uniform1f(this.timeLocation, now);
+    gl.uniform2f(this.impactCenterLocation, this.impactCenterX, this.impactCenterY);
+    gl.uniform1f(this.impactTimeLocation, this.impactTime);
+    gl.uniform1f(this.impactStrengthLocation, this.impactStrength);
 
     gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
 
