@@ -6,10 +6,13 @@ import type { RockRenderNode } from "../rendering/RockRenderNode";
 import { sampleTerrainMesh } from "../physics/TerrainHeightfield";
 
 const ROCK_RADIUS = 9;
+const ROCK_DENSITY = 2600;
 const RELEASE_HEIGHT = 30;
 const FIXED_TIMESTEP = 1 / 60;
 const TRAJECTORY_MIN_STEP = 5;
 const STATUS_INTERVAL_MS = 250;
+const REST_SPEED_THRESHOLD = 0.35;
+const REST_DURATION_SECONDS = 2.5;
 
 type StatusWriter = (message: string) => void;
 
@@ -21,10 +24,24 @@ export interface RockfallTelemetry {
   currentSpeed: number;
 }
 
+export interface RockfallResult {
+  point: Point;
+  elapsedSeconds: number;
+  horizontalDistance: number;
+  totalDistance: number;
+  elevationDrop: number;
+  maxSpeed: number;
+  rockMassKg: number;
+  peakKineticEnergyJ: number;
+  reason: "rested" | "boundary" | "fell-below-domain";
+}
+
 export type TrajectoryWriter = (
   points: number[][],
   telemetry: RockfallTelemetry
 ) => void;
+
+export type ResultWriter = (result: RockfallResult) => void;
 
 export class RockfallSimulation {
   private readonly rapierReady = RAPIER.init();
@@ -32,6 +49,7 @@ export class RockfallSimulation {
   private readonly rockNode: RockRenderNode;
   private readonly writeStatus: StatusWriter;
   private readonly writeTrajectory: TrajectoryWriter;
+  private readonly writeResult: ResultWriter;
 
   private world: RAPIER.World | null = null;
   private body: RAPIER.RigidBody | null = null;
@@ -46,6 +64,7 @@ export class RockfallSimulation {
   private elapsedSeconds = 0;
   private maxSpeed = 0;
   private totalDistance = 0;
+  private restSeconds = 0;
   private trajectoryPoints: number[][] = [];
   private lastTrajectoryPoint: Point | null = null;
 
@@ -53,12 +72,14 @@ export class RockfallSimulation {
     view: SceneView,
     rockNode: RockRenderNode,
     writeStatus: StatusWriter,
-    writeTrajectory: TrajectoryWriter
+    writeTrajectory: TrajectoryWriter,
+    writeResult: ResultWriter
   ) {
     this.view = view;
     this.rockNode = rockNode;
     this.writeStatus = writeStatus;
     this.writeTrajectory = writeTrajectory;
+    this.writeResult = writeResult;
   }
 
   async release(point: Point): Promise<void> {
@@ -99,7 +120,7 @@ export class RockfallSimulation {
 
     world.createCollider(
       RAPIER.ColliderDesc.ball(ROCK_RADIUS)
-        .setDensity(2.6)
+        .setDensity(ROCK_DENSITY)
         .setFriction(0.8)
         .setRestitution(0.12),
       body
@@ -115,6 +136,7 @@ export class RockfallSimulation {
     this.elapsedSeconds = 0;
     this.maxSpeed = 0;
     this.totalDistance = 0;
+    this.restSeconds = 0;
     this.trajectoryPoints = [];
     this.lastTrajectoryPoint = null;
 
@@ -168,6 +190,12 @@ export class RockfallSimulation {
       const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
       this.maxSpeed = Math.max(this.maxSpeed, speed);
 
+      if (speed < REST_SPEED_THRESHOLD && this.elapsedSeconds > 2) {
+        this.restSeconds += frameDelta;
+      } else {
+        this.restSeconds = 0;
+      }
+
       const horizontalDistance = Math.hypot(translation.x, translation.z);
       this.captureTrajectory(point, {
         elapsedSeconds: this.elapsedSeconds,
@@ -186,11 +214,19 @@ export class RockfallSimulation {
       }
 
       const boundary = Math.max(this.terrainSpan / 2 - 75, 100);
-      if (horizontalDistance > boundary || translation.y < -1000) {
-        this.writeStatus(
-          `Simulation complete — runout ${horizontalDistance.toFixed(0)} m · path ${this.totalDistance.toFixed(0)} m · max speed ${this.maxSpeed.toFixed(1)} m/s · time ${this.elapsedSeconds.toFixed(1)} s.`
-        );
-        this.stopAnimation();
+
+      if (this.restSeconds >= REST_DURATION_SECONDS) {
+        this.completeSimulation(point, horizontalDistance, "rested");
+        return;
+      }
+
+      if (horizontalDistance > boundary) {
+        this.completeSimulation(point, horizontalDistance, "boundary");
+        return;
+      }
+
+      if (translation.y < -1000) {
+        this.completeSimulation(point, horizontalDistance, "fell-below-domain");
         return;
       }
 
@@ -225,6 +261,41 @@ export class RockfallSimulation {
       ...telemetry,
       totalDistance: this.totalDistance
     });
+  }
+
+  private completeSimulation(
+    point: Point,
+    horizontalDistance: number,
+    reason: RockfallResult["reason"]
+  ): void {
+    if (!this.origin) {
+      return;
+    }
+
+    const rockVolume = (4 / 3) * Math.PI * ROCK_RADIUS ** 3;
+    const rockMassKg = rockVolume * ROCK_DENSITY;
+    const peakKineticEnergyJ = 0.5 * rockMassKg * this.maxSpeed ** 2;
+    const elevationDrop = (this.origin.z ?? 0) - (point.z ?? 0);
+
+    const result: RockfallResult = {
+      point: point.clone(),
+      elapsedSeconds: this.elapsedSeconds,
+      horizontalDistance,
+      totalDistance: this.totalDistance,
+      elevationDrop,
+      maxSpeed: this.maxSpeed,
+      rockMassKg,
+      peakKineticEnergyJ,
+      reason
+    };
+
+    this.writeResult(result);
+
+    this.writeStatus(
+      `Simulation complete — runout ${horizontalDistance.toFixed(0)} m · path ${this.totalDistance.toFixed(0)} m · drop ${elevationDrop.toFixed(0)} m · max speed ${this.maxSpeed.toFixed(1)} m/s · peak KE ${(peakKineticEnergyJ / 1_000_000).toFixed(1)} MJ.`
+    );
+
+    this.stopAnimation();
   }
 
   private stopAnimation(): void {
