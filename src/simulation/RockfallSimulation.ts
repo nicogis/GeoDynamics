@@ -7,6 +7,8 @@ import { sampleTerrainMesh } from "../physics/TerrainHeightfield";
 
 const ROCK_RADIUS = 9;
 const ROCK_DENSITY = 2600;
+const WATER_DENSITY = 1000;
+const WATER_DRAG_RATE = 1.15;
 
 const ROCK_HULL_VERTICES = new Float32Array([
   -8.5, -6.5, -5.5,
@@ -307,20 +309,34 @@ export class RockfallSimulation {
     }
 
     if (inWater) {
-      const immersion = Math.min(Math.max(submergedDepth / (ROCK_RADIUS * 2), 0), 1);
-      const dragScale = 1.8e5 * immersion;
+      const immersion = Math.min(
+        Math.max(submergedDepth / (ROCK_RADIUS * 2), 0),
+        1
+      );
+
+      const mass = this.body.mass();
+
+      // Stable drag model: convert the chosen damping rate into a force
+      // through F = m * a, so the response does not depend on collider volume.
+      const dragAcceleration = WATER_DRAG_RATE * immersion;
 
       this.body.addForce(
         {
-          x: -velocity.x * dragScale,
-          y: -velocity.y * dragScale,
-          z: -velocity.z * dragScale
+          x: -velocity.x * dragAcceleration * mass,
+          y: -velocity.y * dragAcceleration * mass,
+          z: -velocity.z * dragAcceleration * mass
         },
         true
       );
 
-      const displacedVolume = (4 / 3) * Math.PI * ROCK_RADIUS ** 3 * immersion;
-      const buoyancyForce = 1000 * 9.81 * displacedVolume;
+      // The rock is denser than water, so even at full immersion buoyancy
+      // must remain below its weight. Derive buoyancy from the actual Rapier
+      // rigid-body mass instead of the approximate spherical render volume.
+      const buoyancyForce =
+        mass *
+        9.81 *
+        (WATER_DENSITY / ROCK_DENSITY) *
+        immersion;
 
       this.body.addForce({ x: 0, y: buoyancyForce, z: 0 }, true);
     }
