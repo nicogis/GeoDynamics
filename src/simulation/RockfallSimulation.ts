@@ -287,6 +287,11 @@ export class RockfallSimulation {
       return;
     }
 
+    // Forces added with Rapier addForce() persist on the rigid body.
+    // Clear the previous hydrodynamic contribution before recomputing it
+    // for the current frame, otherwise drag/buoyancy accumulate indefinitely.
+    this.body.resetForces(true);
+
     const surface = this.water.getSurface();
     if (!surface) {
       this.wasInWater = false;
