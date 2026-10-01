@@ -100,11 +100,16 @@ export async function createScene(container: string): Promise<SceneView> {
       const energyMj = result.peakKineticEnergyJ / 1_000_000;
       const massTonnes = result.rockMassKg / 1000;
 
+      const markerPoint = result.point.clone();
+      markerPoint.z = (markerPoint.z ?? 0) + 18;
+
       const resultGraphic = new Graphic({
-        geometry: result.point,
+        geometry: markerPoint,
         symbol: new SimpleMarkerSymbol({
-          size: 12,
+          size: 18,
+          color: [220, 45, 45, 0.95],
           outline: {
+            color: [255, 255, 255, 1],
             width: 2
           }
         }),
@@ -143,16 +148,30 @@ export async function createScene(container: string): Promise<SceneView> {
   );
 
   view.on("click", (event) => {
-    const point = view.toMap({ x: event.x, y: event.y }) as Point | null;
-    if (!point) {
-      return;
-    }
+    void (async () => {
+      const hit = await view.hitTest(event);
 
-    trajectoryLayer.removeAll();
-    resultLayer.removeAll();
-    trajectoryGraphic = null;
+      const resultHit = hit.results.some(
+        (item) =>
+          item.type === "graphic" &&
+          item.graphic.layer === resultLayer
+      );
 
-    void simulation.release(point).catch((error: unknown) => {
+      if (resultHit) {
+        return;
+      }
+
+      const point = view.toMap({ x: event.x, y: event.y }) as Point | null;
+      if (!point) {
+        return;
+      }
+
+      trajectoryLayer.removeAll();
+      resultLayer.removeAll();
+      trajectoryGraphic = null;
+
+      await simulation.release(point);
+    })().catch((error: unknown) => {
       console.error("Rockfall simulation failed:", error);
 
       writeStatus(
