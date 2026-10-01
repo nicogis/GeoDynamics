@@ -57,6 +57,7 @@ export type TrajectoryWriter = (
 ) => void;
 
 export type ResultWriter = (result: RockfallResult) => void;
+export type BasinWriter = (point: Point) => void;
 
 export class RockfallSimulation {
   private readonly rapierReady = RAPIER.init();
@@ -65,6 +66,7 @@ export class RockfallSimulation {
   private readonly writeStatus: StatusWriter;
   private readonly writeTrajectory: TrajectoryWriter;
   private readonly writeResult: ResultWriter;
+  private readonly writeBasin: BasinWriter;
 
   private world: RAPIER.World | null = null;
   private body: RAPIER.RigidBody | null = null;
@@ -88,13 +90,15 @@ export class RockfallSimulation {
     rockNode: RockRenderNode,
     writeStatus: StatusWriter,
     writeTrajectory: TrajectoryWriter,
-    writeResult: ResultWriter
+    writeResult: ResultWriter,
+    writeBasin: BasinWriter
   ) {
     this.view = view;
     this.rockNode = rockNode;
     this.writeStatus = writeStatus;
     this.writeTrajectory = writeTrajectory;
     this.writeResult = writeResult;
+    this.writeBasin = writeBasin;
   }
 
   async release(point: Point): Promise<void> {
@@ -110,6 +114,8 @@ export class RockfallSimulation {
     if (runId !== this.runId) {
       return;
     }
+
+    this.writeBasin(terrain.lowestPoint);
 
     this.world?.free();
 
