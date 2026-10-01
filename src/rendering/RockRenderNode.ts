@@ -76,9 +76,11 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
     uniform mat3 uNormalMatrix;
 
     out vec3 vNormal;
+    out vec3 vLocalPosition;
 
     void main() {
       vNormal = normalize(uNormalMatrix * aNormal);
+      vLocalPosition = aPosition;
       gl_Position = uProjection * uModelView * vec4(aPosition, 1.0);
     }
   `;
@@ -87,15 +89,83 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
     precision highp float;
 
     in vec3 vNormal;
+    in vec3 vLocalPosition;
     uniform vec3 uColor;
 
     out vec4 fragColor;
 
+    float hash31(vec3 p) {
+      p = fract(p * 0.1031);
+      p += dot(p, p.yzx + 33.33);
+      return fract((p.x + p.y) * p.z);
+    }
+
+    float valueNoise(vec3 p) {
+      vec3 i = floor(p);
+      vec3 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+
+      float n000 = hash31(i + vec3(0.0, 0.0, 0.0));
+      float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+      float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+      float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+      float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+      float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+      float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+      float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+
+      float nx00 = mix(n000, n100, f.x);
+      float nx10 = mix(n010, n110, f.x);
+      float nx01 = mix(n001, n101, f.x);
+      float nx11 = mix(n011, n111, f.x);
+      float nxy0 = mix(nx00, nx10, f.y);
+      float nxy1 = mix(nx01, nx11, f.y);
+
+      return mix(nxy0, nxy1, f.z);
+    }
+
+    float fbm(vec3 p) {
+      float value = 0.0;
+      float amplitude = 0.5;
+
+      for (int i = 0; i < 4; i++) {
+        value += amplitude * valueNoise(p);
+        p = p * 2.03 + vec3(11.7, 7.9, 13.1);
+        amplitude *= 0.5;
+      }
+
+      return value;
+    }
+
     void main() {
+      vec3 normal = normalize(vNormal);
       vec3 lightDirection = normalize(vec3(0.45, 0.65, 0.75));
-      float diffuse = max(dot(normalize(vNormal), lightDirection), 0.0);
-      float lighting = 0.28 + 0.72 * diffuse;
-      fragColor = vec4(uColor * lighting, 1.0);
+      float diffuse = max(dot(normal, lightDirection), 0.0);
+      float lighting = 0.22 + 0.78 * diffuse;
+
+      vec3 p = vLocalPosition * 0.34;
+      float coarse = fbm(p);
+      float fine = fbm(p * 3.7 + vec3(4.3, 1.2, 8.1));
+      float veins = smoothstep(0.66, 0.86, abs(sin(
+        vLocalPosition.x * 0.42 +
+        vLocalPosition.y * 0.19 -
+        vLocalPosition.z * 0.31 +
+        coarse * 4.0
+      )));
+
+      vec3 darkStone = vec3(0.17, 0.15, 0.13);
+      vec3 warmStone = vec3(0.37, 0.31, 0.24);
+      vec3 paleStone = vec3(0.48, 0.45, 0.39);
+      vec3 rockColor = mix(darkStone, warmStone, coarse);
+      rockColor = mix(rockColor, paleStone, fine * 0.35);
+      rockColor = mix(rockColor, vec3(0.12, 0.16, 0.08), smoothstep(0.72, 0.92, coarse) * 0.22);
+      rockColor *= mix(0.78, 1.08, fine);
+      rockColor = mix(rockColor, vec3(0.62, 0.59, 0.52), veins * 0.16);
+
+      float rim = pow(1.0 - max(normal.z, 0.0), 2.0);
+      float roughShade = mix(0.92, 1.05, fine) - rim * 0.05;
+
+      fragColor = vec4(rockColor * lighting * roughShade, 1.0);
     }
   `;
 
