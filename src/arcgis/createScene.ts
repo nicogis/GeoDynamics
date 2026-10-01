@@ -146,9 +146,6 @@ export async function createScene(container: string): Promise<SceneView> {
       });
 
       resultLayer.add(resultGraphic);
-    },
-    (basinPoint) => {
-      waterNode.setWater(basinPoint, 420);
     }
   );
 
@@ -168,6 +165,14 @@ export async function createScene(container: string): Promise<SceneView> {
 
       const point = view.toMap({ x: event.x, y: event.y }) as Point | null;
       if (!point) {
+        return;
+      }
+
+      if (event.native.shiftKey) {
+        waterNode.setWater(point, 420);
+        writeStatus(
+          `Water basin set — z ${(point.z ?? 0).toFixed(1)} m. Click normally to release the rock.`
+        );
         return;
       }
 
