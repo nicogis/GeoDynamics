@@ -202,6 +202,26 @@ const RockRenderNodeClass = RenderNode.createSubclass({
     const gl = this.gl;
     const geometry = new IcosahedronGeometry(this.radius, 2).toNonIndexed();
     const positions = geometry.getAttribute("position");
+
+    for (let i = 0; i < positions.count; i += 1) {
+      const x = positions.getX(i);
+      const y = positions.getY(i);
+      const z = positions.getZ(i);
+
+      const directionalScale =
+        1 +
+        0.10 * Math.sin(x * 0.31 + z * 0.17) +
+        0.07 * Math.cos(y * 0.27 - x * 0.13);
+
+      positions.setXYZ(
+        i,
+        x * directionalScale * 1.04,
+        y * directionalScale * 0.96,
+        z * directionalScale
+      );
+    }
+
+    geometry.computeVertexNormals();
     const normals = geometry.getAttribute("normal");
 
     this.program = createProgram(gl);
