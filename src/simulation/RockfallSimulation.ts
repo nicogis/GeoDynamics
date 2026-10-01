@@ -111,6 +111,7 @@ export class RockfallSimulation {
       return;
     }
 
+
     this.world?.free();
 
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
