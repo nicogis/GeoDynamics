@@ -26,8 +26,8 @@ The next scenario will extend the experiment with a water basin and barrier, con
 4. **Trajectory GIS output** — long-range path, runout, speed and distance metrics. ✅
 5. **GIS rockfall result** — endpoint, elevation drop, mass and kinetic-energy attributes. ✅
 6. **Higher-fidelity rockfall physics** — 129 × 129 terrain sampling and irregular convex rock collider. ✅
-7. **Water surface base** — explicitly placed animated WebGL water patch. 🚧
-8. **Water impact** — GPU height-field water simulation and impact impulse.
+7. **Water surface base** — explicitly placed animated WebGL water patch. ✅
+8. **Water impact** — rock/water intersection, impact-generated ripples, drag and buoyancy coupling. 🚧
 9. **Barrier / overtopping** — simplified overflow propagation.
 10. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
@@ -99,6 +99,8 @@ ArcGIS SceneView
       +-- WaterRenderNode
       |       +-- Shift + click basin placement
       |       +-- animated WebGL water surface
+      |       +-- impact-centered dynamic ripples
+      |       +-- water footprint / surface query
       |
       +-- RockRenderNode
               |
