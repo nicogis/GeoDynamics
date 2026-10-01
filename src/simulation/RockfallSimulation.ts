@@ -3,7 +3,7 @@ import SceneView from "@arcgis/core/views/SceneView";
 import RAPIER from "@dimforge/rapier3d-compat";
 
 import type { RockRenderNode } from "../rendering/RockRenderNode";
-import { sampleTerrainHeightfield } from "../physics/TerrainHeightfield";
+import { sampleTerrainMesh } from "../physics/TerrainHeightfield";
 
 const ROCK_RADIUS = 9;
 const RELEASE_HEIGHT = 30;
@@ -45,7 +45,7 @@ export class RockfallSimulation {
 
     await this.rapierReady;
 
-    const terrain = await sampleTerrainHeightfield(this.view, point);
+    const terrain = await sampleTerrainMesh(this.view, point);
 
     if (runId !== this.runId) {
       return;
@@ -56,11 +56,9 @@ export class RockfallSimulation {
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     world.timestep = FIXED_TIMESTEP;
 
-    const terrainCollider = RAPIER.ColliderDesc.heightfield(
-      terrain.rows,
-      terrain.cols,
-      terrain.heights,
-      { x: terrain.span, y: 1, z: terrain.span }
+    const terrainCollider = RAPIER.ColliderDesc.trimesh(
+      terrain.vertices,
+      terrain.indices
     )
       .setFriction(0.9)
       .setRestitution(0.05);
@@ -90,8 +88,10 @@ export class RockfallSimulation {
     this.accumulator = 0;
     this.lastStatusUpdate = 0;
 
+    const triangles = terrain.indices.length / 3;
+
     this.writeStatus(
-      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples. Rock released ${RELEASE_HEIGHT} m above ground.`
+      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles. Rock released ${RELEASE_HEIGHT} m above ground.`
     );
 
     this.animate(runId);
@@ -144,7 +144,6 @@ export class RockfallSimulation {
         this.lastStatusUpdate = time;
       }
 
-      // Stop runaway simulations once the body has clearly left the sampled terrain.
       const horizontalDistance = Math.hypot(translation.x, translation.z);
       if (
         horizontalDistance > 500 ||
