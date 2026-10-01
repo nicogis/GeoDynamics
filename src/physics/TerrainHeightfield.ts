@@ -2,9 +2,10 @@ import Multipoint from "@arcgis/core/geometry/Multipoint";
 import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 
-export interface SampledTerrain {
+export interface SampledTerrainMesh {
   origin: Point;
-  heights: Float32Array;
+  vertices: Float32Array;
+  indices: Uint32Array;
   rows: number;
   cols: number;
   span: number;
@@ -12,26 +13,24 @@ export interface SampledTerrain {
   maxElevation: number;
 }
 
-export async function sampleTerrainHeightfield(
+export async function sampleTerrainMesh(
   view: SceneView,
   center: Point,
   span = 900,
   size = 41
-): Promise<SampledTerrain> {
+): Promise<SampledTerrainMesh> {
   if (!center.spatialReference.isWebMercator) {
     throw new Error("The current POC expects a Web Mercator SceneView.");
   }
 
   if (size < 3 || size % 2 === 0) {
-    throw new Error("Heightfield size must be an odd number greater than or equal to 3.");
+    throw new Error("Terrain grid size must be an odd number greater than or equal to 3.");
   }
 
   const half = span / 2;
   const step = span / (size - 1);
   const points: number[][] = [];
 
-  // Rapier heightfields use a column-major height matrix.
-  // Rows advance along local Z (ArcGIS Y / north), columns along local X (east).
   for (let col = 0; col < size; col += 1) {
     const x = center.x - half + col * step;
 
@@ -57,27 +56,57 @@ export async function sampleTerrainHeightfield(
   });
 
   const sampledPoints = result.geometry.points;
-  const centerIndex = Math.floor(size / 2) * size + Math.floor(size / 2);
+  const centerOffset = Math.floor(size / 2);
+  const centerIndex = centerOffset * size + centerOffset;
   const centerElevation = sampledPoints[centerIndex]?.[2];
 
   if (!Number.isFinite(centerElevation)) {
     throw new Error("Unable to sample terrain elevation at the release point.");
   }
 
-  const heights = new Float32Array(size * size);
+  const vertices = new Float32Array(size * size * 3);
   let minElevation = Number.POSITIVE_INFINITY;
   let maxElevation = Number.NEGATIVE_INFINITY;
 
-  for (let i = 0; i < sampledPoints.length; i += 1) {
-    const elevation = sampledPoints[i]?.[2];
+  for (let col = 0; col < size; col += 1) {
+    for (let row = 0; row < size; row += 1) {
+      const sampleIndex = col * size + row;
+      const elevation = sampledPoints[sampleIndex]?.[2];
 
-    if (!Number.isFinite(elevation)) {
-      throw new Error("Terrain sampling returned a no-data elevation.");
+      if (!Number.isFinite(elevation)) {
+        throw new Error("Terrain sampling returned a no-data elevation.");
+      }
+
+      const vertexIndex = sampleIndex * 3;
+      vertices[vertexIndex] = -half + col * step;
+      vertices[vertexIndex + 1] = elevation - centerElevation;
+      vertices[vertexIndex + 2] = -half + row * step;
+
+      minElevation = Math.min(minElevation, elevation);
+      maxElevation = Math.max(maxElevation, elevation);
     }
+  }
 
-    heights[i] = elevation - centerElevation;
-    minElevation = Math.min(minElevation, elevation);
-    maxElevation = Math.max(maxElevation, elevation);
+  const triangleCount = (size - 1) * (size - 1) * 2;
+  const indices = new Uint32Array(triangleCount * 3);
+  let indexOffset = 0;
+
+  for (let col = 0; col < size - 1; col += 1) {
+    for (let row = 0; row < size - 1; row += 1) {
+      const a = col * size + row;
+      const b = (col + 1) * size + row;
+      const c = col * size + row + 1;
+      const d = (col + 1) * size + row + 1;
+
+      // Counter-clockwise winding when viewed from above (positive local Y).
+      indices[indexOffset++] = a;
+      indices[indexOffset++] = c;
+      indices[indexOffset++] = b;
+
+      indices[indexOffset++] = b;
+      indices[indexOffset++] = c;
+      indices[indexOffset++] = d;
+    }
   }
 
   const origin = new Point({
@@ -89,7 +118,8 @@ export async function sampleTerrainHeightfield(
 
   return {
     origin,
-    heights,
+    vertices,
+    indices,
     rows: size,
     cols: size,
     span,
