@@ -5,8 +5,16 @@ import * as webgl from "@arcgis/core/views/3d/webgl";
 import {
   IcosahedronGeometry,
   Matrix3,
-  Matrix4
+  Matrix4,
+  Quaternion
 } from "three";
+
+type RotationLike = {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+};
 
 type RockNodeInternal = RenderNode & {
   radius: number;
@@ -26,7 +34,11 @@ type RockNodeInternal = RenderNode & {
   modelMatrix: Matrix4;
   modelViewMatrix: Matrix4;
   normalMatrix: Matrix3;
+  poseMatrix: Matrix4;
+  rotationMatrix: Matrix4;
+  rockQuaternion: Quaternion;
   setRock(point: Point): void;
+  setRockPose(point: Point, rotation?: RotationLike): void;
   ensureResources(): void;
 };
 
@@ -132,6 +144,9 @@ const RockRenderNodeClass = RenderNode.createSubclass({
   modelMatrix: new Matrix4(),
   modelViewMatrix: new Matrix4(),
   normalMatrix: new Matrix3(),
+  poseMatrix: new Matrix4(),
+  rotationMatrix: new Matrix4(),
+  rockQuaternion: new Quaternion(),
 
   initialize(this: RockNodeInternal) {
     this.consumes.required.push("opaque-color");
@@ -139,16 +154,43 @@ const RockRenderNodeClass = RenderNode.createSubclass({
   },
 
   setRock(this: RockNodeInternal, point: Point) {
-    const z = (point.z ?? 0) + this.radius;
-    const position = [point.x, point.y, z];
+    const center = point.clone();
+    center.z = (point.z ?? 0) + this.radius;
+    this.setRockPose(center);
+  },
 
-    this.rockTransform = webgl.renderCoordinateTransformAt(
+  setRockPose(
+    this: RockNodeInternal,
+    point: Point,
+    rotation?: RotationLike
+  ) {
+    const transform = webgl.renderCoordinateTransformAt(
       this.view,
-      position,
+      [point.x, point.y, point.z ?? 0],
       point.spatialReference,
       new Float64Array(16)
-    ) ?? null;
+    );
 
+    if (!transform) {
+      this.rockTransform = null;
+      return;
+    }
+
+    this.poseMatrix.fromArray(transform);
+
+    if (rotation) {
+      this.rockQuaternion.set(
+        rotation.x,
+        rotation.y,
+        rotation.z,
+        rotation.w
+      );
+
+      this.rotationMatrix.makeRotationFromQuaternion(this.rockQuaternion);
+      this.poseMatrix.multiply(this.rotationMatrix);
+    }
+
+    this.rockTransform = new Float64Array(this.poseMatrix.elements);
     this.requestRender();
   },
 
