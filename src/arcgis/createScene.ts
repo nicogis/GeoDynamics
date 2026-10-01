@@ -8,6 +8,7 @@ import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 
 import { createRockRenderNode } from "../rendering/RockRenderNode";
+import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
 
 export async function createScene(container: string): Promise<SceneView> {
@@ -53,6 +54,7 @@ export async function createScene(container: string): Promise<SceneView> {
   await view.when();
 
   const rockNode = createRockRenderNode(view);
+  const waterNode = createWaterRenderNode(view);
   const status = document.querySelector<HTMLDivElement>("#status");
   const writeStatus = (message: string) => {
     if (status) {
@@ -144,6 +146,9 @@ export async function createScene(container: string): Promise<SceneView> {
       });
 
       resultLayer.add(resultGraphic);
+    },
+    (basinPoint) => {
+      waterNode.setWater(basinPoint, 420);
     }
   );
 
