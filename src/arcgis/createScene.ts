@@ -5,6 +5,7 @@ import Point from "@arcgis/core/geometry/Point";
 import Polyline from "@arcgis/core/geometry/Polyline";
 import SceneView from "@arcgis/core/views/SceneView";
 import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
+import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 
 import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
@@ -17,10 +18,17 @@ export async function createScene(container: string): Promise<SceneView> {
     }
   });
 
+  const resultLayer = new GraphicsLayer({
+    title: "Rockfall results",
+    elevationInfo: {
+      mode: "absolute-height"
+    }
+  });
+
   const map = new Map({
     basemap: "satellite",
     ground: "world-elevation",
-    layers: [trajectoryLayer]
+    layers: [trajectoryLayer, resultLayer]
   });
 
   const view = new SceneView({
@@ -85,6 +93,52 @@ export async function createScene(container: string): Promise<SceneView> {
           maxSpeed: telemetry.maxSpeed
         };
       }
+    },
+    (result) => {
+      resultLayer.removeAll();
+
+      const energyMj = result.peakKineticEnergyJ / 1_000_000;
+      const massTonnes = result.rockMassKg / 1000;
+
+      const resultGraphic = new Graphic({
+        geometry: result.point,
+        symbol: new SimpleMarkerSymbol({
+          size: 12,
+          outline: {
+            width: 2
+          }
+        }),
+        attributes: {
+          runoutM: result.horizontalDistance,
+          pathM: result.totalDistance,
+          elevationDropM: result.elevationDrop,
+          maxSpeedMs: result.maxSpeed,
+          elapsedSeconds: result.elapsedSeconds,
+          rockMassTonnes: massTonnes,
+          peakEnergyMj: energyMj,
+          endReason: result.reason
+        },
+        popupTemplate: {
+          title: "Rockfall result",
+          content: [
+            {
+              type: "fields",
+              fieldInfos: [
+                { fieldName: "runoutM", label: "Runout", format: { digitSeparator: true, places: 0 } },
+                { fieldName: "pathM", label: "Path length", format: { digitSeparator: true, places: 0 } },
+                { fieldName: "elevationDropM", label: "Elevation drop", format: { digitSeparator: true, places: 0 } },
+                { fieldName: "maxSpeedMs", label: "Max speed (m/s)", format: { digitSeparator: true, places: 1 } },
+                { fieldName: "elapsedSeconds", label: "Simulation time (s)", format: { digitSeparator: true, places: 1 } },
+                { fieldName: "rockMassTonnes", label: "Rock mass (t)", format: { digitSeparator: true, places: 0 } },
+                { fieldName: "peakEnergyMj", label: "Peak kinetic energy (MJ)", format: { digitSeparator: true, places: 1 } },
+                { fieldName: "endReason", label: "End condition" }
+              ]
+            }
+          ]
+        }
+      });
+
+      resultLayer.add(resultGraphic);
     }
   );
 
@@ -95,6 +149,7 @@ export async function createScene(container: string): Promise<SceneView> {
     }
 
     trajectoryLayer.removeAll();
+    resultLayer.removeAll();
     trajectoryGraphic = null;
 
     void simulation.release(point).catch((error: unknown) => {
