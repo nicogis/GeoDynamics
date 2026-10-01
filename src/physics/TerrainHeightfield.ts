@@ -11,6 +11,7 @@ export interface SampledTerrainMesh {
   span: number;
   minElevation: number;
   maxElevation: number;
+  lowestPoint: Point;
 }
 
 export async function sampleTerrainMesh(
@@ -67,6 +68,7 @@ export async function sampleTerrainMesh(
   const vertices = new Float32Array(size * size * 3);
   let minElevation = Number.POSITIVE_INFINITY;
   let maxElevation = Number.NEGATIVE_INFINITY;
+  let minSampleIndex = -1;
 
   for (let col = 0; col < size; col += 1) {
     for (let row = 0; row < size; row += 1) {
@@ -82,7 +84,11 @@ export async function sampleTerrainMesh(
       vertices[vertexIndex + 1] = elevation - centerElevation;
       vertices[vertexIndex + 2] = -half + row * step;
 
-      minElevation = Math.min(minElevation, elevation);
+      if (elevation < minElevation) {
+        minElevation = elevation;
+        minSampleIndex = sampleIndex;
+      }
+
       maxElevation = Math.max(maxElevation, elevation);
     }
   }
@@ -109,6 +115,19 @@ export async function sampleTerrainMesh(
     }
   }
 
+  const minSample = sampledPoints[minSampleIndex];
+
+  if (!minSample) {
+    throw new Error("Unable to determine the lowest sampled terrain point.");
+  }
+
+  const lowestPoint = new Point({
+    x: minSample[0],
+    y: minSample[1],
+    z: minSample[2],
+    spatialReference: center.spatialReference
+  });
+
   const origin = new Point({
     x: center.x,
     y: center.y,
@@ -124,6 +143,7 @@ export async function sampleTerrainMesh(
     cols: size,
     span,
     minElevation,
-    maxElevation
+    maxElevation,
+    lowestPoint
   };
 }
