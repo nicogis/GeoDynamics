@@ -7,6 +7,8 @@ import { sampleTerrainMesh } from "../physics/TerrainHeightfield";
 
 const ROCK_RADIUS = 9;
 const ROCK_DENSITY = 2600;
+const WATER_DENSITY = 1000;
+const WATER_DRAG_RATE = 1.15;
 
 const ROCK_HULL_VERTICES = new Float32Array([
   -8.5, -6.5, -5.5,
@@ -58,6 +60,17 @@ export type TrajectoryWriter = (
 
 export type ResultWriter = (result: RockfallResult) => void;
 
+export interface WaterSurface {
+  center: Point;
+  size: number;
+  elevation: number;
+}
+
+export interface WaterInteraction {
+  getSurface(): WaterSurface | null;
+  addImpact(point: Point, speed: number): void;
+}
+
 export class RockfallSimulation {
   private readonly rapierReady = RAPIER.init();
   private readonly view: SceneView;
@@ -65,6 +78,7 @@ export class RockfallSimulation {
   private readonly writeStatus: StatusWriter;
   private readonly writeTrajectory: TrajectoryWriter;
   private readonly writeResult: ResultWriter;
+  private readonly water: WaterInteraction;
 
   private world: RAPIER.World | null = null;
   private body: RAPIER.RigidBody | null = null;
@@ -82,19 +96,22 @@ export class RockfallSimulation {
   private restSeconds = 0;
   private trajectoryPoints: number[][] = [];
   private lastTrajectoryPoint: Point | null = null;
+  private wasInWater = false;
 
   constructor(
     view: SceneView,
     rockNode: RockRenderNode,
     writeStatus: StatusWriter,
     writeTrajectory: TrajectoryWriter,
-    writeResult: ResultWriter
+    writeResult: ResultWriter,
+    water: WaterInteraction
   ) {
     this.view = view;
     this.rockNode = rockNode;
     this.writeStatus = writeStatus;
     this.writeTrajectory = writeTrajectory;
     this.writeResult = writeResult;
+    this.water = water;
   }
 
   async release(point: Point): Promise<void> {
@@ -161,6 +178,7 @@ export class RockfallSimulation {
     this.restSeconds = 0;
     this.trajectoryPoints = [];
     this.lastTrajectoryPoint = null;
+    this.wasInWater = false;
 
     const triangles = terrain.indices.length / 3;
 
@@ -212,6 +230,8 @@ export class RockfallSimulation {
       const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
       this.maxSpeed = Math.max(this.maxSpeed, speed);
 
+      this.applyWaterInteraction(point, velocity, speed);
+
       if (speed < REST_SPEED_THRESHOLD && this.elapsedSeconds > 2) {
         this.restSeconds += frameDelta;
       } else {
@@ -256,6 +276,77 @@ export class RockfallSimulation {
     };
 
     this.frameId = requestAnimationFrame(tick);
+  }
+
+  private applyWaterInteraction(
+    point: Point,
+    velocity: { x: number; y: number; z: number },
+    speed: number
+  ): void {
+    if (!this.body) {
+      return;
+    }
+
+    // Forces added with Rapier addForce() persist on the rigid body.
+    // Clear the previous hydrodynamic contribution before recomputing it
+    // for the current frame, otherwise drag/buoyancy accumulate indefinitely.
+    this.body.resetForces(true);
+
+    const surface = this.water.getSurface();
+    if (!surface) {
+      this.wasInWater = false;
+      return;
+    }
+
+    const half = surface.size / 2;
+    const dx = point.x - surface.center.x;
+    const dy = point.y - surface.center.y;
+    const insideFootprint = Math.abs(dx) <= half && Math.abs(dy) <= half;
+    const rockBottom = (point.z ?? 0) - ROCK_RADIUS;
+    const submergedDepth = surface.elevation - rockBottom;
+    const inWater = insideFootprint && submergedDepth > 0;
+
+    if (inWater && !this.wasInWater) {
+      this.water.addImpact(point, speed);
+      this.writeStatus(
+        `Water impact — speed ${speed.toFixed(1)} m/s at z ${(point.z ?? 0).toFixed(1)} m.`
+      );
+    }
+
+    if (inWater) {
+      const immersion = Math.min(
+        Math.max(submergedDepth / (ROCK_RADIUS * 2), 0),
+        1
+      );
+
+      const mass = this.body.mass();
+
+      // Stable drag model: convert the chosen damping rate into a force
+      // through F = m * a, so the response does not depend on collider volume.
+      const dragAcceleration = WATER_DRAG_RATE * immersion;
+
+      this.body.addForce(
+        {
+          x: -velocity.x * dragAcceleration * mass,
+          y: -velocity.y * dragAcceleration * mass,
+          z: -velocity.z * dragAcceleration * mass
+        },
+        true
+      );
+
+      // The rock is denser than water, so even at full immersion buoyancy
+      // must remain below its weight. Derive buoyancy from the actual Rapier
+      // rigid-body mass instead of the approximate spherical render volume.
+      const buoyancyForce =
+        mass *
+        9.81 *
+        (WATER_DENSITY / ROCK_DENSITY) *
+        immersion;
+
+      this.body.addForce({ x: 0, y: buoyancyForce, z: 0 }, true);
+    }
+
+    this.wasInWater = inWater;
   }
 
   private captureTrajectory(point: Point, telemetry: RockfallTelemetry): void {
