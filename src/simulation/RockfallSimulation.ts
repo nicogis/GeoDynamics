@@ -7,6 +7,21 @@ import { sampleTerrainMesh } from "../physics/TerrainHeightfield";
 
 const ROCK_RADIUS = 9;
 const ROCK_DENSITY = 2600;
+
+const ROCK_HULL_VERTICES = new Float32Array([
+  -8.5, -6.5, -5.5,
+   7.8, -7.2, -4.2,
+   8.9,  5.8, -3.8,
+  -7.2,  7.6, -4.7,
+  -6.1, -5.4,  7.9,
+   6.9, -4.8,  8.6,
+   7.1,  6.7,  6.3,
+  -8.8,  5.9,  5.1,
+   0.8,  9.4,  0.6,
+  -0.7, -9.0,  1.1,
+   9.5,  0.9,  1.8,
+  -9.2, -0.6, -0.8
+]);
 const RELEASE_HEIGHT = 30;
 const FIXED_TIMESTEP = 1 / 60;
 const TRAJECTORY_MIN_STEP = 5;
@@ -118,8 +133,14 @@ export class RockfallSimulation {
       )
     );
 
+    const rockCollider = RAPIER.ColliderDesc.convexHull(ROCK_HULL_VERTICES);
+
+    if (!rockCollider) {
+      throw new Error("Unable to create the irregular rock convex hull.");
+    }
+
     world.createCollider(
-      RAPIER.ColliderDesc.ball(ROCK_RADIUS)
+      rockCollider
         .setDensity(ROCK_DENSITY)
         .setFriction(0.8)
         .setRestitution(0.12),
@@ -143,7 +164,7 @@ export class RockfallSimulation {
     const triangles = terrain.indices.length / 3;
 
     this.writeStatus(
-      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles. Rock released ${RELEASE_HEIGHT} m above ground.`
+      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles. Irregular convex rock released ${RELEASE_HEIGHT} m above ground.`
     );
 
     this.animate(runId);
