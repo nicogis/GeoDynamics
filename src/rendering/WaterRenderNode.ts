@@ -60,9 +60,9 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
       vec3 p = aPosition;
       float wave =
         sin((p.x + uTime * 5.0) * 0.045) * 0.55 +
-        cos((p.z - uTime * 3.2) * 0.038) * 0.35;
+        cos((p.y - uTime * 3.2) * 0.038) * 0.35;
 
-      p.y += wave;
+      p.z += wave;
       vWave = wave;
 
       gl_Position = uProjection * uModelView * vec4(p, 1.0);
@@ -156,12 +156,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     const gl = this.gl;
     const half = this.size / 2;
     const vertices = new Float32Array([
-      -half, 0, -half,
-       half, 0, -half,
-       half, 0,  half,
-      -half, 0, -half,
-       half, 0,  half,
-      -half, 0,  half
+      -half, -half, 0,
+       half, -half, 0,
+       half,  half, 0,
+      -half, -half, 0,
+       half,  half, 0,
+      -half,  half, 0
     ]);
 
     this.program = createProgram(gl);
