@@ -52,7 +52,7 @@ export async function sampleWaterBasin(
   const elevations = result.geometry.points;
   const seedElevation = seed.z;
 
-  if (!Number.isFinite(seedElevation)) {
+  if (seedElevation === undefined || !Number.isFinite(seedElevation)) {
     throw new Error("Unable to determine the water seed elevation.");
   }
 
