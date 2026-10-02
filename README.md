@@ -27,9 +27,10 @@ The next scenario will extend the experiment with a water basin and barrier, con
 5. **GIS rockfall result** — endpoint, elevation drop, mass and kinetic-energy attributes. ✅
 6. **Higher-fidelity rockfall physics** — 129 × 129 terrain sampling and irregular convex rock collider. ✅
 7. **Water surface base** — explicitly placed animated WebGL water patch. ✅
-8. **Water impact** — rock/water intersection, impact-generated ripples, drag and buoyancy coupling. 🚧
-9. **Barrier / overtopping** — simplified overflow propagation.
-10. **GIS outputs** — trajectories, impact energy and hazard surfaces.
+8. **Water impact** — rock/water intersection, impact-generated ripples, drag and buoyancy coupling. ✅
+9. **Persistent GPU water state** — ping-pong floating-point textures storing wave height and vertical velocity. 🚧
+10. **Barrier / overtopping** — simplified overflow propagation.
+11. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
@@ -99,7 +100,9 @@ ArcGIS SceneView
       +-- WaterRenderNode
       |       +-- Shift + click basin placement
       |       +-- animated WebGL water surface
-      |       +-- impact-centered dynamic ripples
+      |       +-- floating-point ping-pong state textures
+      |       +-- persistent height / velocity propagation
+      |       +-- impact injection into GPU state
       |       +-- water footprint / surface query
       |
       +-- RockRenderNode
