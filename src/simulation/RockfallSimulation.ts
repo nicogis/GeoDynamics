@@ -68,6 +68,7 @@ export interface WaterSurface {
 
 export interface WaterInteraction {
   getSurface(): WaterSurface | null;
+  containsPoint(point: Point): boolean;
   addImpact(point: Point, speed: number): void;
 }
 
@@ -298,13 +299,9 @@ export class RockfallSimulation {
       return;
     }
 
-    const half = surface.size / 2;
-    const dx = point.x - surface.center.x;
-    const dy = point.y - surface.center.y;
-    const insideFootprint = Math.abs(dx) <= half && Math.abs(dy) <= half;
     const rockBottom = (point.z ?? 0) - ROCK_RADIUS;
     const submergedDepth = surface.elevation - rockBottom;
-    const inWater = insideFootprint && submergedDepth > 0;
+    const inWater = this.water.containsPoint(point) && submergedDepth > 0;
 
     if (inWater && !this.wasInWater) {
       this.water.addImpact(point, speed);
