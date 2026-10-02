@@ -2,6 +2,11 @@ import Multipoint from "@arcgis/core/geometry/Multipoint";
 import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 
+export interface DamBarrier {
+  start: Point;
+  end: Point;
+}
+
 export interface SampledWaterBasin {
   center: Point;
   size: number;
@@ -10,6 +15,7 @@ export interface SampledWaterBasin {
   mask: Uint8Array;
   wetCellCount: number;
   touchesBoundary: boolean;
+  damLength: number;
 }
 
 interface BasinSample {
@@ -59,9 +65,38 @@ function touchesMaskBoundary(
   return false;
 }
 
+function pointToSegmentDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const lengthSquared = abx * abx + aby * aby;
+
+  if (lengthSquared === 0) {
+    return Math.hypot(px - ax, py - ay);
+  }
+
+  const t = Math.min(
+    Math.max((apx * abx + apy * aby) / lengthSquared, 0),
+    1
+  );
+  const cx = ax + t * abx;
+  const cy = ay + t * aby;
+
+  return Math.hypot(px - cx, py - cy);
+}
+
 async function sampleConnectedMask(
   view: SceneView,
   seed: Point,
+  dam: DamBarrier,
   size: number,
   resolution: number,
   waterElevation: number
@@ -96,17 +131,52 @@ async function sampleConnectedMask(
   const elevations = result.geometry.points;
   const candidate = new Uint8Array(resolution * resolution);
 
-  for (let i = 0; i < candidate.length; i += 1) {
-    const elevation = elevations[i]?.[2];
+  // Make the numerical barrier slightly thicker than one DEM cell so the
+  // 4-neighbour flood fill cannot leak through a diagonal gap.
+  const barrierHalfWidth = Math.max(step * 1.35, 4);
 
-    if (Number.isFinite(elevation) && elevation <= waterElevation) {
-      candidate[i] = 255;
+  for (let row = 0; row < resolution; row += 1) {
+    const y = seed.y - half + (row + 0.5) * step;
+
+    for (let col = 0; col < resolution; col += 1) {
+      const index = row * resolution + col;
+      const elevation = elevations[index]?.[2];
+
+      if (!Number.isFinite(elevation) || elevation > waterElevation) {
+        continue;
+      }
+
+      const x = seed.x - half + (col + 0.5) * step;
+      const distanceToDam = pointToSegmentDistance(
+        x,
+        y,
+        dam.start.x,
+        dam.start.y,
+        dam.end.x,
+        dam.end.y
+      );
+
+      if (distanceToDam > barrierHalfWidth) {
+        candidate[index] = 255;
+      }
     }
   }
 
-  const centerCell = Math.floor(resolution / 2);
-  const seedIndex = centerCell * resolution + centerCell;
-  candidate[seedIndex] = 255;
+  const seedCol = Math.min(
+    Math.max(Math.floor((seed.x - (seed.x - half)) / step), 0),
+    resolution - 1
+  );
+  const seedRow = Math.min(
+    Math.max(Math.floor((seed.y - (seed.y - half)) / step), 0),
+    resolution - 1
+  );
+  const seedIndex = seedRow * resolution + seedCol;
+
+  if (candidate[seedIndex] === 0) {
+    throw new Error(
+      "The basin seed is outside the reservoir water level or too close to the dam."
+    );
+  }
 
   const mask = new Uint8Array(candidate.length);
   const queue = new Int32Array(candidate.length);
@@ -158,21 +228,53 @@ async function sampleConnectedMask(
 export async function sampleWaterBasin(
   view: SceneView,
   seed: Point,
+  dam: DamBarrier,
   initialSize = 420,
   resolution = 128,
-  waterDepth = 12
+  freeboard = 1
 ): Promise<SampledWaterBasin> {
   if (!seed.spatialReference.isWebMercator) {
     throw new Error("The current POC expects a Web Mercator SceneView.");
   }
 
-  const seedElevation = seed.z;
-  if (seedElevation === undefined || !Number.isFinite(seedElevation)) {
-    throw new Error("Unable to determine the water seed elevation.");
+  const startElevation = dam.start.z;
+  const endElevation = dam.end.z;
+
+  if (
+    startElevation === undefined ||
+    endElevation === undefined ||
+    !Number.isFinite(startElevation) ||
+    !Number.isFinite(endElevation)
+  ) {
+    throw new Error("Unable to determine the dam crest elevation.");
   }
 
-  const waterElevation = seedElevation + waterDepth;
-  const maxSize = 1680;
+  // The reservoir cannot stand above the lower dam abutment. A small
+  // freeboard keeps the POC water surface below the crest.
+  const waterElevation =
+    Math.min(startElevation, endElevation) - Math.max(freeboard, 0);
+
+  const seedElevation = seed.z;
+  if (
+    seedElevation === undefined ||
+    !Number.isFinite(seedElevation) ||
+    seedElevation >= waterElevation
+  ) {
+    throw new Error(
+      "Place the basin seed upstream on terrain below the dam crest elevation."
+    );
+  }
+
+  const damLength = Math.hypot(
+    dam.end.x - dam.start.x,
+    dam.end.y - dam.start.y
+  );
+
+  if (damLength < 10) {
+    throw new Error("The dam barrier is too short.");
+  }
+
+  const maxSize = 2400;
   let size = initialSize;
   let sampled: BasinSample;
 
@@ -180,6 +282,7 @@ export async function sampleWaterBasin(
     sampled = await sampleConnectedMask(
       view,
       seed,
+      dam,
       size,
       resolution,
       waterElevation
@@ -201,6 +304,7 @@ export async function sampleWaterBasin(
     waterElevation,
     mask: rotatedMask,
     wetCellCount: sampled.wetCellCount,
-    touchesBoundary: sampled.touchesBoundary
+    touchesBoundary: sampled.touchesBoundary,
+    damLength
   };
 }
