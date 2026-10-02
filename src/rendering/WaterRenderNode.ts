@@ -102,12 +102,12 @@ function createStateTexture(gl: WebGL2RenderingContext): WebGLTexture {
   gl.texImage2D(
     gl.TEXTURE_2D,
     0,
-    gl.RG32F,
+    gl.RGBA16F,
     WATER_TEXTURE_SIZE,
     WATER_TEXTURE_SIZE,
     0,
-    gl.RG,
-    gl.FLOAT,
+    gl.RGBA,
+    gl.HALF_FLOAT,
     null
   );
 
@@ -187,7 +187,7 @@ const simulationFragmentSource = `#version 300 es
   uniform sampler2D uState;
   uniform vec2 uTexel;
   in vec2 vUv;
-  out vec2 outState;
+  out vec4 outState;
 
   void main() {
     vec2 state = texture(uState, vUv).rg;
@@ -205,7 +205,7 @@ const simulationFragmentSource = `#version 300 es
     velocity *= 0.992;
     height += velocity * 0.48;
 
-    outState = vec2(height, velocity);
+    outState = vec4(height, velocity, 0.0, 1.0);
   }
 `;
 
@@ -220,7 +220,7 @@ const impactFragmentSource = `#version 300 es
   uniform float uStrength;
 
   in vec2 vUv;
-  out vec2 outState;
+  out vec4 outState;
 
   void main() {
     vec2 state = texture(uState, vUv).rg;
@@ -231,7 +231,7 @@ const impactFragmentSource = `#version 300 es
     state.r += drop * uStrength;
     state.g += drop * uStrength * 0.16;
 
-    outState = state;
+    outState = vec4(state, 0.0, 1.0);
   }
 `;
 
@@ -377,9 +377,11 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
     const gl = this.gl;
 
-    if (!gl.getExtension("EXT_color_buffer_float")) {
+    const floatColorBuffer = gl.getExtension("EXT_color_buffer_float");
+
+    if (!floatColorBuffer) {
       throw new Error(
-        "GPU water simulation requires EXT_color_buffer_float support."
+        "GPU water simulation requires floating-point color-buffer support."
       );
     }
 
