@@ -158,6 +158,113 @@ async function queryElevations(
   return elevations;
 }
 
+export async function resolveDamEndAtCrest(
+  view: SceneView,
+  start: Point,
+  candidate: Point,
+  maxExtension = 1600
+): Promise<Point> {
+  const crestElevation = start.z;
+
+  if (
+    crestElevation === undefined ||
+    !Number.isFinite(crestElevation)
+  ) {
+    throw new Error("Unable to determine the dam crest elevation.");
+  }
+
+  const dx = candidate.x - start.x;
+  const dy = candidate.y - start.y;
+  const clickedDistance = Math.hypot(dx, dy);
+
+  if (clickedDistance < 1) {
+    throw new Error("The dam barrier is too short.");
+  }
+
+  const clickedElevation = candidate.z;
+  if (
+    clickedElevation !== undefined &&
+    Number.isFinite(clickedElevation) &&
+    clickedElevation >= crestElevation
+  ) {
+    const end = candidate.clone();
+    end.z = crestElevation;
+    return end;
+  }
+
+  const ux = dx / clickedDistance;
+  const uy = dy / clickedDistance;
+  const searchEnd = Math.min(clickedDistance + maxExtension, 4000);
+  const sampleSpacing = 10;
+  const sampleCount = Math.max(
+    2,
+    Math.ceil((searchEnd - clickedDistance) / sampleSpacing) + 1
+  );
+
+  const points: number[][] = [];
+  for (let i = 0; i < sampleCount; i += 1) {
+    const distance =
+      clickedDistance +
+      ((searchEnd - clickedDistance) * i) / (sampleCount - 1);
+    points.push([
+      start.x + ux * distance,
+      start.y + uy * distance
+    ]);
+  }
+
+  const elevations = await queryElevations(
+    view,
+    points,
+    start.spatialReference
+  );
+
+  let previousDistance = clickedDistance;
+  let previousElevation =
+    clickedElevation !== undefined && Number.isFinite(clickedElevation)
+      ? clickedElevation
+      : elevations[0];
+
+  for (let i = 0; i < elevations.length; i += 1) {
+    const elevation = elevations[i];
+    if (elevation === undefined || !Number.isFinite(elevation)) {
+      continue;
+    }
+
+    const distance =
+      clickedDistance +
+      ((searchEnd - clickedDistance) * i) / (sampleCount - 1);
+
+    if (
+      previousElevation !== undefined &&
+      Number.isFinite(previousElevation) &&
+      previousElevation < crestElevation &&
+      elevation >= crestElevation
+    ) {
+      const denominator = elevation - previousElevation;
+      const ratio =
+        denominator === 0
+          ? 1
+          : (crestElevation - previousElevation) / denominator;
+      const intersectionDistance =
+        previousDistance + (distance - previousDistance) * ratio;
+
+      return new Point({
+        x: start.x + ux * intersectionDistance,
+        y: start.y + uy * intersectionDistance,
+        z: crestElevation,
+        spatialReference: start.spatialReference
+      });
+    }
+
+    previousDistance = distance;
+    previousElevation = elevation;
+  }
+
+  throw new Error(
+    "The second dam side does not reach the crest elevation in the search direction."
+  );
+}
+
 async function sampleDamProfile(
   view: SceneView,
   dam: DamBarrier,
@@ -263,8 +370,16 @@ async function sampleConnectedMask(
 
       const x = center.x - half + (col + 0.5) * step;
       const cellSide = sideOfLine(x, y, dam);
+      const damDx = dam.end.x - dam.start.x;
+      const damDy = dam.end.y - dam.start.y;
+      const damLength = Math.hypot(damDx, damDy);
+      const distanceToDam =
+        damLength > 0 ? Math.abs(cellSide) / damLength : Number.POSITIVE_INFINITY;
 
-      if (cellSide * seedSide >= 0) {
+      // Keep only the upstream half-plane and leave a narrow dry strip at the
+      // dam itself. The rendered dam face fills this strip and the water mask
+      // cannot bleed one cell into the downstream side.
+      if (cellSide * seedSide > 0 && distanceToDam > step * 0.6) {
         candidate[index] = 255;
       }
     }
