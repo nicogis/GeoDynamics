@@ -7,6 +7,7 @@ import SceneView from "@arcgis/core/views/SceneView";
 import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 
+import { sampleWaterBasin } from "../physics/WaterBasin";
 import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
@@ -149,6 +150,7 @@ export async function createScene(container: string): Promise<SceneView> {
     },
     {
       getSurface: () => waterNode.getSurface(),
+      containsPoint: (point) => waterNode.containsPoint(point),
       addImpact: (point, speed) => waterNode.addImpact(point, speed)
     }
   );
@@ -173,9 +175,19 @@ export async function createScene(container: string): Promise<SceneView> {
       }
 
       if (event.native.shiftKey) {
-        waterNode.setWater(point, 420);
+        writeStatus("Sampling terrain-aware water basin...");
+
+        const basin = await sampleWaterBasin(view, point);
+        waterNode.setBasin(
+          basin.center,
+          basin.size,
+          basin.waterElevation,
+          basin.mask,
+          basin.resolution
+        );
+
         writeStatus(
-          `Water basin set — z ${(point.z ?? 0).toFixed(1)} m. Click normally to release the rock.`
+          `Water basin set — level ${basin.waterElevation.toFixed(1)} m · ${basin.wetCellCount.toLocaleString()} wet cells. Click normally to release the rock.`
         );
         return;
       }
