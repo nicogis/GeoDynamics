@@ -107,6 +107,8 @@ export async function createScene(container: string): Promise<SceneView> {
   let damBarrier: DamBarrier | null = null;
   let damPreviewGraphic: Graphic | null = null;
   let damGroundPreviewGraphic: Graphic | null = null;
+  let damWaterLevelGraphic: Graphic | null = null;
+  let basinRequestId = 0;
 
   const simulation = new RockfallSimulation(
     view,
@@ -280,6 +282,7 @@ export async function createScene(container: string): Promise<SceneView> {
           damLayer.removeAll();
           damGroundPreviewLayer.removeAll();
           damFaceLayer.removeAll();
+          damWaterLevelGraphic = null;
           damPreviewGraphic = null;
           damGroundPreviewGraphic = null;
 
@@ -358,9 +361,15 @@ export async function createScene(container: string): Promise<SceneView> {
           return;
         }
 
+        const requestId = ++basinRequestId;
         writeStatus("Sampling reservoir behind dam barrier...");
 
         const basin = await sampleWaterBasin(view, point, damBarrier);
+
+        if (requestId !== basinRequestId) {
+          return;
+        }
+
         waterNode.setBasin(
           basin.center,
           basin.size,
@@ -416,20 +425,23 @@ export async function createScene(container: string): Promise<SceneView> {
           const waterLevelLine = new Polyline({
             spatialReference: view.spatialReference,
             paths: [[
-              [damBarrier.start.x, damBarrier.start.y, basin.waterElevation],
-              [damBarrier.end.x, damBarrier.end.y, basin.waterElevation]
+              basin.waterLevelStart,
+              basin.waterLevelEnd
             ]]
           });
 
-          damLayer.add(
-            new Graphic({
+          if (!damWaterLevelGraphic) {
+            damWaterLevelGraphic = new Graphic({
               geometry: waterLevelLine,
               symbol: new SimpleLineSymbol({
                 color: [80, 220, 255, 1],
                 width: 4
               })
-            })
-          );
+            });
+            damLayer.add(damWaterLevelGraphic);
+          } else {
+            damWaterLevelGraphic.geometry = waterLevelLine;
+          }
         }
 
         const areaHa = basin.areaM2 / 10_000;
