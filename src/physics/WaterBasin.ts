@@ -111,8 +111,23 @@ export async function sampleWaterBasin(
     tryAdd(row, col + 1);
   }
 
+  const rotatedMask = new Uint8Array(mask.length);
+
+  // ArcGIS map X/Y and the RenderNode water-grid orientation differ by a
+  // quarter turn in this POC. Rotate the connected basin mask 90° clockwise
+  // so the DEM-derived footprint lines up with the visible terrain.
+  for (let row = 0; row < resolution; row += 1) {
+    for (let col = 0; col < resolution; col += 1) {
+      const sourceIndex = row * resolution + col;
+      const targetRow = col;
+      const targetCol = resolution - 1 - row;
+      const targetIndex = targetRow * resolution + targetCol;
+      rotatedMask[targetIndex] = mask[sourceIndex];
+    }
+  }
+
   let wetCellCount = 0;
-  for (const value of mask) {
+  for (const value of rotatedMask) {
     if (value !== 0) {
       wetCellCount += 1;
     }
@@ -123,7 +138,7 @@ export async function sampleWaterBasin(
     size,
     resolution,
     waterElevation,
-    mask,
+    mask: rotatedMask,
     wetCellCount
   };
 }
