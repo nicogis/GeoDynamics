@@ -346,7 +346,7 @@ export async function sampleWaterBasin(
     waterElevation,
     damCrestElevation: profile.crestElevation,
     maxDamHeight: profile.maxDamHeight,
-    mask: rotateMaskClockwise(sampled.mask, resolution),
+    mask: sampled.mask,
     wetCellCount: sampled.wetCellCount,
     touchesBoundary: sampled.touchesBoundary,
     damLength,
