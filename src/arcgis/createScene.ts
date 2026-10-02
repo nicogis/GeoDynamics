@@ -265,10 +265,13 @@ export async function createScene(container: string): Promise<SceneView> {
           basin.resolution
         );
 
+        const areaHa = basin.areaM2 / 10_000;
+        const volumeHm3 = basin.volumeM3 / 1_000_000;
+
         writeStatus(
           basin.touchesBoundary
-            ? `Reservoir still reaches the sampled domain edge at ${basin.size.toFixed(0)} m. Check dam placement. Crest-derived level ${basin.waterElevation.toFixed(1)} m · ${basin.wetCellCount.toLocaleString()} wet cells.`
-            : `Reservoir generated — level ${basin.waterElevation.toFixed(1)} m · dam ${basin.damLength.toFixed(0)} m · ${basin.wetCellCount.toLocaleString()} wet cells · domain ${basin.size.toFixed(0)} m. Click normally to release the rock.`
+            ? `Reservoir still reaches the sampled domain edge at ${basin.size.toFixed(0)} m. Check dam placement. Level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³.`
+            : `Reservoir generated — level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · dam ${basin.damLength.toFixed(0)} m · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³. Click normally to release the rock.`
         );
         return;
       }
