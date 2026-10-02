@@ -29,13 +29,14 @@ The next scenario will extend the experiment with a water basin and barrier, con
 7. **Water surface base** — explicitly placed animated WebGL water patch. ✅
 8. **Water impact** — rock/water intersection, impact-generated ripples, drag and buoyancy coupling. ✅
 9. **Persistent GPU water state** — ping-pong floating-point textures storing wave height and vertical velocity. ✅
-10. **Terrain-aware basin** — ArcGIS DEM mask + connected wet cells around the selected seed. 🚧
-11. **Barrier / overtopping** — simplified overflow propagation.
-12. **GIS outputs** — trajectories, impact energy and hazard surfaces.
+10. **Terrain-aware basin** — ArcGIS DEM mask + connected wet cells around the selected seed. ✅
+11. **Dam-constrained reservoir** — explicit barrier across the valley closes the flood-fill and derives the reservoir level from the dam crest. 🚧
+12. **Barrier / overtopping** — simplified overflow propagation.
+13. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
-Use **Shift + click** to seed a terrain-aware water basin, then click normally to release the boulder. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
+Use **Ctrl + click** twice to define the dam across the valley, then **Shift + click** upstream to generate the reservoir behind it. Click normally to release the boulder. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
 
 The physical coordinate system is intentionally local:
 
@@ -98,8 +99,14 @@ ArcGIS SceneView
       |       +-- elevation drop / rock mass
       |       +-- peak kinetic energy
       |
+      +-- dam GraphicsLayer
+      |       +-- Ctrl + click first abutment
+      |       +-- Ctrl + click opposite abutment
+      |
       +-- WaterRenderNode
-      |       +-- Shift + click basin placement
+      |       +-- Shift + click upstream reservoir seed
+      |       +-- dam-constrained DEM flood fill
+      |       +-- crest-derived water level
       |       +-- animated WebGL water surface
       |       +-- ArcGIS DEM sampling around the basin seed
       |       +-- connected wet-cell mask below the water level
