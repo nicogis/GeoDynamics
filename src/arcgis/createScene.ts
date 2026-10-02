@@ -73,6 +73,7 @@ export async function createScene(container: string): Promise<SceneView> {
   let trajectoryGraphic: Graphic | null = null;
   let damStart: Point | null = null;
   let damBarrier: DamBarrier | null = null;
+  let damPreviewGraphic: Graphic | null = null;
 
   const simulation = new RockfallSimulation(
     view,
@@ -164,6 +165,38 @@ export async function createScene(container: string): Promise<SceneView> {
     }
   );
 
+  view.on("pointer-move", (event) => {
+    if (!damStart) {
+      return;
+    }
+
+    const point = view.toMap({ x: event.x, y: event.y }) as Point | null;
+    if (!point) {
+      return;
+    }
+
+    const previewLine = new Polyline({
+      spatialReference: view.spatialReference,
+      paths: [[
+        [damStart.x, damStart.y, damStart.z ?? 0],
+        [point.x, point.y, point.z ?? 0]
+      ]]
+    });
+
+    if (!damPreviewGraphic) {
+      damPreviewGraphic = new Graphic({
+        geometry: previewLine,
+        symbol: new SimpleLineSymbol({
+          color: [255, 170, 0, 0.75],
+          width: 3
+        })
+      });
+      damLayer.add(damPreviewGraphic);
+    } else {
+      damPreviewGraphic.geometry = previewLine;
+    }
+  });
+
   view.on("click", (event) => {
     void (async () => {
       const hit = await view.hitTest(event);
@@ -188,6 +221,7 @@ export async function createScene(container: string): Promise<SceneView> {
           damStart = point.clone();
           damBarrier = null;
           damLayer.removeAll();
+          damPreviewGraphic = null;
 
           damLayer.add(
             new Graphic({
@@ -223,6 +257,7 @@ export async function createScene(container: string): Promise<SceneView> {
         });
 
         damLayer.removeAll();
+        damPreviewGraphic = null;
         damLayer.add(
           new Graphic({
             geometry: damLine,
