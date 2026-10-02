@@ -305,12 +305,12 @@ const renderVertexSource = `#version 300 es
   uniform vec2 uTexel;
 
   out float vHeight;
-  out float vWet;
+  out vec2 vUv;
   out vec3 vNormal;
 
   void main() {
     float height = texture(uState, aUv).r;
-    vWet = texture(uMask, aUv).r;
+    vUv = aUv;
     float left = texture(uState, aUv - vec2(uTexel.x, 0.0)).r;
     float right = texture(uState, aUv + vec2(uTexel.x, 0.0)).r;
     float down = texture(uState, aUv - vec2(0.0, uTexel.y)).r;
@@ -331,13 +331,19 @@ const renderVertexSource = `#version 300 es
 const renderFragmentSource = `#version 300 es
   precision highp float;
 
+  uniform sampler2D uMask;
+
   in float vHeight;
-  in float vWet;
+  in vec2 vUv;
   in vec3 vNormal;
   out vec4 fragColor;
 
   void main() {
-    if (vWet < 0.5) {
+    // Clip at fragment resolution rather than interpolating a wet/dry flag
+    // from the 128x128 render mesh. This keeps a 256/512 DEM mask aligned
+    // with the terrain shoreline and prevents triangles from bleeding across
+    // the dam or smoothing over narrow terrain features.
+    if (texture(uMask, vUv).r < 0.5) {
       discard;
     }
 
