@@ -454,18 +454,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       return false;
     }
 
-    // The basin mask is rotated 90° clockwise before upload so it matches
-    // the RenderNode local XY orientation. Use the same transform for every
-    // GIS point -> texture lookup.
-    const u = 1 - mapV;
-    const v = mapU;
-
     const col = Math.min(
-      Math.floor(u * this.basinResolution),
+      Math.floor(mapU * this.basinResolution),
       this.basinResolution - 1
     );
     const row = Math.min(
-      Math.floor(v * this.basinResolution),
+      Math.floor(mapV * this.basinResolution),
       this.basinResolution - 1
     );
 
@@ -482,8 +476,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     const mapV = (point.y - this.center.y + half) / this.size;
 
     this.pendingImpact = {
-      u: Math.min(Math.max(1 - mapV, 0), 1),
-      v: Math.min(Math.max(mapU, 0), 1),
+      u: Math.min(Math.max(mapU, 0), 1),
+      v: Math.min(Math.max(mapV, 0), 1),
       strength: Math.min(Math.max(speed * 0.055, 0.6), 3.5)
     };
 
