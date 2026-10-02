@@ -2,8 +2,11 @@ import Graphic from "@arcgis/core/Graphic";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import Map from "@arcgis/core/Map";
 import Point from "@arcgis/core/geometry/Point";
+import Polygon from "@arcgis/core/geometry/Polygon";
 import Polyline from "@arcgis/core/geometry/Polyline";
 import SceneView from "@arcgis/core/views/SceneView";
+import PolygonSymbol3D from "@arcgis/core/symbols/PolygonSymbol3D";
+import FillSymbol3DLayer from "@arcgis/core/symbols/FillSymbol3DLayer";
 import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 
@@ -27,8 +30,22 @@ export async function createScene(container: string): Promise<SceneView> {
     }
   });
 
+  const damGroundPreviewLayer = new GraphicsLayer({
+    title: "Dam ground projection",
+    elevationInfo: {
+      mode: "on-the-ground"
+    }
+  });
+
   const damLayer = new GraphicsLayer({
     title: "Dam barrier",
+    elevationInfo: {
+      mode: "absolute-height"
+    }
+  });
+
+  const damFaceLayer = new GraphicsLayer({
+    title: "Dam face",
     elevationInfo: {
       mode: "absolute-height"
     }
@@ -37,7 +54,13 @@ export async function createScene(container: string): Promise<SceneView> {
   const map = new Map({
     basemap: "satellite",
     ground: "world-elevation",
-    layers: [trajectoryLayer, resultLayer, damLayer]
+    layers: [
+      trajectoryLayer,
+      resultLayer,
+      damGroundPreviewLayer,
+      damFaceLayer,
+      damLayer
+    ]
   });
 
   const view = new SceneView({
@@ -74,6 +97,7 @@ export async function createScene(container: string): Promise<SceneView> {
   let damStart: Point | null = null;
   let damBarrier: DamBarrier | null = null;
   let damPreviewGraphic: Graphic | null = null;
+  let damGroundPreviewGraphic: Graphic | null = null;
 
   const simulation = new RockfallSimulation(
     view,
@@ -175,25 +199,49 @@ export async function createScene(container: string): Promise<SceneView> {
       return;
     }
 
-    const previewLine = new Polyline({
+    const crestElevation = damStart.z ?? point.z ?? 0;
+
+    const crestPreview = new Polyline({
       spatialReference: view.spatialReference,
       paths: [[
-        [damStart.x, damStart.y, damStart.z ?? 0],
-        [point.x, point.y, point.z ?? 0]
+        [damStart.x, damStart.y, crestElevation],
+        [point.x, point.y, crestElevation]
+      ]]
+    });
+
+    const groundPreview = new Polyline({
+      spatialReference: view.spatialReference,
+      paths: [[
+        [damStart.x, damStart.y],
+        [point.x, point.y]
       ]]
     });
 
     if (!damPreviewGraphic) {
       damPreviewGraphic = new Graphic({
-        geometry: previewLine,
+        geometry: crestPreview,
         symbol: new SimpleLineSymbol({
-          color: [255, 170, 0, 0.75],
-          width: 3
+          color: [255, 170, 0, 0.9],
+          width: 4
         })
       });
       damLayer.add(damPreviewGraphic);
     } else {
-      damPreviewGraphic.geometry = previewLine;
+      damPreviewGraphic.geometry = crestPreview;
+    }
+
+    if (!damGroundPreviewGraphic) {
+      damGroundPreviewGraphic = new Graphic({
+        geometry: groundPreview,
+        symbol: new SimpleLineSymbol({
+          color: [255, 255, 255, 0.75],
+          width: 2,
+          style: "dash"
+        })
+      });
+      damGroundPreviewLayer.add(damGroundPreviewGraphic);
+    } else {
+      damGroundPreviewGraphic.geometry = groundPreview;
     }
   });
 
@@ -221,7 +269,10 @@ export async function createScene(container: string): Promise<SceneView> {
           damStart = point.clone();
           damBarrier = null;
           damLayer.removeAll();
+          damGroundPreviewLayer.removeAll();
+          damFaceLayer.removeAll();
           damPreviewGraphic = null;
+          damGroundPreviewGraphic = null;
 
           damLayer.add(
             new Graphic({
@@ -243,10 +294,15 @@ export async function createScene(container: string): Promise<SceneView> {
           return;
         }
 
+        const crestElevation = damStart.z ?? point.z ?? 0;
+        const lockedEnd = point.clone();
+        lockedEnd.z = crestElevation;
+
         damBarrier = {
           start: damStart.clone(),
-          end: point.clone()
+          end: lockedEnd
         };
+        damBarrier.start.z = crestElevation;
 
         const damLine = new Polyline({
           spatialReference: view.spatialReference,
@@ -257,7 +313,9 @@ export async function createScene(container: string): Promise<SceneView> {
         });
 
         damLayer.removeAll();
+        damGroundPreviewLayer.removeAll();
         damPreviewGraphic = null;
+        damGroundPreviewGraphic = null;
         damLayer.add(
           new Graphic({
             geometry: damLine,
@@ -299,6 +357,69 @@ export async function createScene(container: string): Promise<SceneView> {
           basin.mask,
           basin.resolution
         );
+
+        const crestElevation = basin.damCrestElevation;
+        const profile = basin.damProfilePoints;
+
+        if (profile.length >= 2) {
+          const ring: number[][] = [];
+
+          for (const pointOnTerrain of profile) {
+            ring.push([
+              pointOnTerrain[0],
+              pointOnTerrain[1],
+              crestElevation
+            ]);
+          }
+
+          for (let i = profile.length - 1; i >= 0; i -= 1) {
+            const pointOnTerrain = profile[i];
+            ring.push([
+              pointOnTerrain[0],
+              pointOnTerrain[1],
+              pointOnTerrain[2]
+            ]);
+          }
+
+          ring.push(ring[0]);
+
+          damFaceLayer.removeAll();
+          damFaceLayer.add(
+            new Graphic({
+              geometry: new Polygon({
+                spatialReference: view.spatialReference,
+                rings: [ring]
+              }),
+              symbol: new PolygonSymbol3D({
+                symbolLayers: [
+                  new FillSymbol3DLayer({
+                    material: {
+                      color: [120, 105, 90, 0.88]
+                    }
+                  })
+                ]
+              })
+            })
+          );
+
+          const waterLevelLine = new Polyline({
+            spatialReference: view.spatialReference,
+            paths: [[
+              [damBarrier.start.x, damBarrier.start.y, basin.waterElevation],
+              [damBarrier.end.x, damBarrier.end.y, basin.waterElevation]
+            ]]
+          });
+
+          damLayer.add(
+            new Graphic({
+              geometry: waterLevelLine,
+              symbol: new SimpleLineSymbol({
+                color: [80, 220, 255, 1],
+                width: 4
+              })
+            })
+          );
+        }
 
         const areaHa = basin.areaM2 / 10_000;
         const volumeHm3 = basin.volumeM3 / 1_000_000;
