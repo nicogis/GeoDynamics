@@ -28,6 +28,7 @@ export interface SampledWaterBasin {
   damLength: number;
   areaM2: number;
   volumeM3: number;
+  damProfilePoints: number[][];
 }
 
 interface BasinSample {
@@ -42,6 +43,7 @@ interface DamProfile {
   crestElevation: number;
   valleyFloorElevation: number;
   maxDamHeight: number;
+  terrainPoints: number[][];
 }
 
 function touchesMaskBoundary(
@@ -184,23 +186,27 @@ async function sampleDamProfile(
     throw new Error("Unable to sample the terrain profile along the dam.");
   }
 
-  const startElevation = elevations[0];
-  const endElevation = elevations[elevations.length - 1];
+  const crestElevation = dam.start.z;
 
   if (
-    startElevation === undefined ||
-    endElevation === undefined
+    crestElevation === undefined ||
+    !Number.isFinite(crestElevation)
   ) {
-    throw new Error("Unable to determine the dam abutment elevations.");
+    throw new Error("Unable to determine the horizontal dam crest elevation.");
   }
 
-  const crestElevation = Math.min(startElevation, endElevation);
   const valleyFloorElevation = Math.min(...elevations);
+  const terrainPoints = points.map((point, index) => [
+    point[0],
+    point[1],
+    elevations[index] ?? valleyFloorElevation
+  ]);
 
   return {
     crestElevation,
     valleyFloorElevation,
-    maxDamHeight: Math.max(crestElevation - valleyFloorElevation, 0)
+    maxDamHeight: Math.max(crestElevation - valleyFloorElevation, 0),
+    terrainPoints
   };
 }
 
@@ -419,6 +425,7 @@ export async function sampleWaterBasin(
     touchesBoundary: sampled.touchesBoundary,
     damLength,
     areaM2: sampled.areaM2,
-    volumeM3: sampled.volumeM3
+    volumeM3: sampled.volumeM3,
+    damProfilePoints: profile.terrainPoints
   };
 }
