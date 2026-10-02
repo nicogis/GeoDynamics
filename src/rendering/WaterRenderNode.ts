@@ -23,6 +23,7 @@ type WaterNodeInternal = RenderNode & {
   activeState: number;
   vertexCount: number;
   initializedResources: boolean;
+  meshSize: number;
   size: number;
   center: Point | null;
   surfaceElevation: number | null;
@@ -42,6 +43,7 @@ type WaterNodeInternal = RenderNode & {
   addImpact(point: Point, speed: number): void;
   getSurface(): { center: Point; size: number; elevation: number } | null;
   ensureResources(): void;
+  rebuildMesh(): void;
   uploadBasinMask(): void;
   resetWaterState(): void;
   runImpactPass(): void;
@@ -385,6 +387,7 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   activeState: 0,
   vertexCount: 0,
   initializedResources: false,
+  meshSize: 0,
   size: 420,
   center: null,
   surfaceElevation: null,
@@ -428,6 +431,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.pendingImpact = null;
 
     if (this.initializedResources) {
+      if (this.meshSize !== this.size) {
+        this.rebuildMesh();
+      }
       this.uploadBasinMask();
       this.resetWaterState();
     }
@@ -441,12 +447,18 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     }
 
     const half = this.size / 2;
-    const u = (point.x - this.center.x + half) / this.size;
-    const v = (point.y - this.center.y + half) / this.size;
+    const mapU = (point.x - this.center.x + half) / this.size;
+    const mapV = (point.y - this.center.y + half) / this.size;
 
-    if (u < 0 || u >= 1 || v < 0 || v >= 1) {
+    if (mapU < 0 || mapU >= 1 || mapV < 0 || mapV >= 1) {
       return false;
     }
+
+    // The basin mask is rotated 90° clockwise before upload so it matches
+    // the RenderNode local XY orientation. Use the same transform for every
+    // GIS point -> texture lookup.
+    const u = 1 - mapV;
+    const v = mapU;
 
     const col = Math.min(
       Math.floor(u * this.basinResolution),
@@ -466,12 +478,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     }
 
     const half = this.size / 2;
-    const localX = point.x - this.center.x;
-    const localY = point.y - this.center.y;
+    const mapU = (point.x - this.center.x + half) / this.size;
+    const mapV = (point.y - this.center.y + half) / this.size;
 
     this.pendingImpact = {
-      u: Math.min(Math.max((localX + half) / this.size, 0), 1),
-      v: Math.min(Math.max((localY + half) / this.size, 0), 1),
+      u: Math.min(Math.max(1 - mapV, 0), 1),
+      v: Math.min(Math.max(mapU, 0), 1),
       strength: Math.min(Math.max(speed * 0.055, 0.6), 3.5)
     };
 
@@ -521,11 +533,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       impactFragmentSource
     );
 
-    const mesh = createWaterMesh(this.size);
     this.meshBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
-    this.vertexCount = mesh.length / 4;
+    this.rebuildMesh();
 
     this.quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
@@ -554,6 +563,19 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.initializedResources = true;
     this.uploadBasinMask();
     this.resetWaterState();
+  },
+
+  rebuildMesh(this: WaterNodeInternal) {
+    if (!this.meshBuffer) {
+      return;
+    }
+
+    const mesh = createWaterMesh(this.size);
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+    this.vertexCount = mesh.length / 4;
+    this.meshSize = this.size;
   },
 
   uploadBasinMask(this: WaterNodeInternal) {
