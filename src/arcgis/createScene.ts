@@ -187,7 +187,9 @@ export async function createScene(container: string): Promise<SceneView> {
         );
 
         writeStatus(
-          `Water basin set — level ${basin.waterElevation.toFixed(1)} m · ${basin.wetCellCount.toLocaleString()} wet cells. Click normally to release the rock.`
+          basin.touchesBoundary
+            ? `Water basin reaches the sampled domain edge at ${basin.size.toFixed(0)} m — a downstream barrier/dam is likely required to close it. Level ${basin.waterElevation.toFixed(1)} m · ${basin.wetCellCount.toLocaleString()} wet cells.`
+            : `Water basin set — level ${basin.waterElevation.toFixed(1)} m · ${basin.wetCellCount.toLocaleString()} wet cells · domain ${basin.size.toFixed(0)} m. Click normally to release the rock.`
         );
         return;
       }
