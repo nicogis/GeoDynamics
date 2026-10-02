@@ -29,6 +29,8 @@ export interface SampledWaterBasin {
   areaM2: number;
   volumeM3: number;
   damProfilePoints: number[][];
+  waterLevelStart: number[];
+  waterLevelEnd: number[];
 }
 
 interface BasinSample {
@@ -317,6 +319,72 @@ async function sampleDamProfile(
   };
 }
 
+function interpolateProfileIntersection(
+  above: number[],
+  below: number[],
+  elevation: number
+): number[] {
+  const z0 = above[2];
+  const z1 = below[2];
+  const denominator = z1 - z0;
+  const t =
+    denominator === 0
+      ? 0
+      : Math.min(Math.max((elevation - z0) / denominator, 0), 1);
+
+  return [
+    above[0] + (below[0] - above[0]) * t,
+    above[1] + (below[1] - above[1]) * t,
+    elevation
+  ];
+}
+
+function waterLevelSpan(
+  profile: number[][],
+  waterElevation: number
+): { start: number[]; end: number[] } {
+  const wetIndices = profile
+    .map((point, index) => ({ point, index }))
+    .filter(({ point }) => point[2] <= waterElevation)
+    .map(({ index }) => index);
+
+  if (wetIndices.length === 0) {
+    throw new Error("The water level does not intersect the dam profile.");
+  }
+
+  const first = wetIndices[0];
+  const last = wetIndices[wetIndices.length - 1];
+
+  let start = [
+    profile[first][0],
+    profile[first][1],
+    waterElevation
+  ];
+  let end = [
+    profile[last][0],
+    profile[last][1],
+    waterElevation
+  ];
+
+  if (first > 0) {
+    start = interpolateProfileIntersection(
+      profile[first - 1],
+      profile[first],
+      waterElevation
+    );
+  }
+
+  if (last < profile.length - 1) {
+    end = interpolateProfileIntersection(
+      profile[last + 1],
+      profile[last],
+      waterElevation
+    );
+  }
+
+  return { start, end };
+}
+
 async function sampleConnectedMask(
   view: SceneView,
   center: Point,
@@ -527,6 +595,11 @@ export async function sampleWaterBasin(
     size = Math.min(size * 1.5, MAX_DOMAIN_SIZE);
   }
 
+  const levelSpan = waterLevelSpan(
+    profile.terrainPoints,
+    waterElevation
+  );
+
   return {
     center,
     size,
@@ -541,6 +614,8 @@ export async function sampleWaterBasin(
     damLength,
     areaM2: sampled.areaM2,
     volumeM3: sampled.volumeM3,
-    damProfilePoints: profile.terrainPoints
+    damProfilePoints: profile.terrainPoints,
+    waterLevelStart: levelSpan.start,
+    waterLevelEnd: levelSpan.end
   };
 }
