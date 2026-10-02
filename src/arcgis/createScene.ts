@@ -10,7 +10,11 @@ import FillSymbol3DLayer from "@arcgis/core/symbols/FillSymbol3DLayer";
 import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 
-import { sampleWaterBasin, type DamBarrier } from "../physics/WaterBasin";
+import {
+  resolveDamEndAtCrest,
+  sampleWaterBasin,
+  type DamBarrier
+} from "../physics/WaterBasin";
 import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
@@ -87,9 +91,14 @@ export async function createScene(container: string): Promise<SceneView> {
   const rockNode = createRockRenderNode(view);
   const waterNode = createWaterRenderNode(view);
   const status = document.querySelector<HTMLDivElement>("#status");
-  const writeStatus = (message: string) => {
+  const writeStatus = (
+    message: string,
+    kind: "normal" | "error" = "normal"
+  ) => {
     if (status) {
       status.textContent = message;
+      status.style.color = kind === "error" ? "#d32f2f" : "";
+      status.style.fontWeight = kind === "error" ? "700" : "";
     }
   };
 
@@ -294,15 +303,17 @@ export async function createScene(container: string): Promise<SceneView> {
           return;
         }
 
-        const crestElevation = damStart.z ?? point.z ?? 0;
-        const lockedEnd = point.clone();
-        lockedEnd.z = crestElevation;
+        const lockedEnd = await resolveDamEndAtCrest(
+          view,
+          damStart,
+          point
+        );
 
         damBarrier = {
           start: damStart.clone(),
           end: lockedEnd
         };
-        damBarrier.start.z = crestElevation;
+        damBarrier.start.z = damStart.z ?? lockedEnd.z ?? 0;
 
         const damLine = new Polyline({
           spatialReference: view.spatialReference,
@@ -443,7 +454,8 @@ export async function createScene(container: string): Promise<SceneView> {
       writeStatus(
         error instanceof Error
           ? `Simulation error: ${error.message}`
-          : "Simulation error. See the browser console for details."
+          : "Simulation error. See the browser console for details.",
+        "error"
       );
     });
   });
