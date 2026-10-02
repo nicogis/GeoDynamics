@@ -9,19 +9,63 @@ export interface SampledWaterBasin {
   waterElevation: number;
   mask: Uint8Array;
   wetCellCount: number;
+  touchesBoundary: boolean;
 }
 
-export async function sampleWaterBasin(
-  view: SceneView,
-  seed: Point,
-  size = 420,
-  resolution = 128,
-  waterDepth = 12
-): Promise<SampledWaterBasin> {
-  if (!seed.spatialReference.isWebMercator) {
-    throw new Error("The current POC expects a Web Mercator SceneView.");
+interface BasinSample {
+  mask: Uint8Array;
+  wetCellCount: number;
+  touchesBoundary: boolean;
+}
+
+function rotateMaskClockwise(
+  mask: Uint8Array,
+  resolution: number
+): Uint8Array {
+  const rotated = new Uint8Array(mask.length);
+
+  for (let row = 0; row < resolution; row += 1) {
+    for (let col = 0; col < resolution; col += 1) {
+      const sourceIndex = row * resolution + col;
+      const targetRow = col;
+      const targetCol = resolution - 1 - row;
+      rotated[targetRow * resolution + targetCol] = mask[sourceIndex];
+    }
   }
 
+  return rotated;
+}
+
+function touchesMaskBoundary(
+  mask: Uint8Array,
+  resolution: number
+): boolean {
+  for (let i = 0; i < resolution; i += 1) {
+    const top = i;
+    const bottom = (resolution - 1) * resolution + i;
+    const left = i * resolution;
+    const right = i * resolution + (resolution - 1);
+
+    if (
+      mask[top] !== 0 ||
+      mask[bottom] !== 0 ||
+      mask[left] !== 0 ||
+      mask[right] !== 0
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function sampleConnectedMask(
+  view: SceneView,
+  seed: Point,
+  size: number,
+  resolution: number,
+  waterElevation: number
+): Promise<BasinSample> {
   const map = view.map;
   if (!map) {
     throw new Error("SceneView does not have an initialized map.");
@@ -50,33 +94,19 @@ export async function sampleWaterBasin(
   });
 
   const elevations = result.geometry.points;
-  const seedElevation = seed.z;
-
-  if (seedElevation === undefined || !Number.isFinite(seedElevation)) {
-    throw new Error("Unable to determine the water seed elevation.");
-  }
-
-  const waterElevation = seedElevation + waterDepth;
   const candidate = new Uint8Array(resolution * resolution);
 
   for (let i = 0; i < candidate.length; i += 1) {
     const elevation = elevations[i]?.[2];
 
-    if (!Number.isFinite(elevation)) {
-      continue;
-    }
-
-    if (elevation <= waterElevation) {
+    if (Number.isFinite(elevation) && elevation <= waterElevation) {
       candidate[i] = 255;
     }
   }
 
   const centerCell = Math.floor(resolution / 2);
   const seedIndex = centerCell * resolution + centerCell;
-
-  if (candidate[seedIndex] === 0) {
-    candidate[seedIndex] = 255;
-  }
+  candidate[seedIndex] = 255;
 
   const mask = new Uint8Array(candidate.length);
   const queue = new Int32Array(candidate.length);
@@ -111,27 +141,58 @@ export async function sampleWaterBasin(
     tryAdd(row, col + 1);
   }
 
-  const rotatedMask = new Uint8Array(mask.length);
-
-  // ArcGIS map X/Y and the RenderNode water-grid orientation differ by a
-  // quarter turn in this POC. Rotate the connected basin mask 90° clockwise
-  // so the DEM-derived footprint lines up with the visible terrain.
-  for (let row = 0; row < resolution; row += 1) {
-    for (let col = 0; col < resolution; col += 1) {
-      const sourceIndex = row * resolution + col;
-      const targetRow = col;
-      const targetCol = resolution - 1 - row;
-      const targetIndex = targetRow * resolution + targetCol;
-      rotatedMask[targetIndex] = mask[sourceIndex];
-    }
-  }
-
   let wetCellCount = 0;
-  for (const value of rotatedMask) {
+  for (const value of mask) {
     if (value !== 0) {
       wetCellCount += 1;
     }
   }
+
+  return {
+    mask,
+    wetCellCount,
+    touchesBoundary: touchesMaskBoundary(mask, resolution)
+  };
+}
+
+export async function sampleWaterBasin(
+  view: SceneView,
+  seed: Point,
+  initialSize = 420,
+  resolution = 128,
+  waterDepth = 12
+): Promise<SampledWaterBasin> {
+  if (!seed.spatialReference.isWebMercator) {
+    throw new Error("The current POC expects a Web Mercator SceneView.");
+  }
+
+  const seedElevation = seed.z;
+  if (seedElevation === undefined || !Number.isFinite(seedElevation)) {
+    throw new Error("Unable to determine the water seed elevation.");
+  }
+
+  const waterElevation = seedElevation + waterDepth;
+  const maxSize = 1680;
+  let size = initialSize;
+  let sampled: BasinSample;
+
+  while (true) {
+    sampled = await sampleConnectedMask(
+      view,
+      seed,
+      size,
+      resolution,
+      waterElevation
+    );
+
+    if (!sampled.touchesBoundary || size >= maxSize) {
+      break;
+    }
+
+    size = Math.min(size * 1.5, maxSize);
+  }
+
+  const rotatedMask = rotateMaskClockwise(sampled.mask, resolution);
 
   return {
     center: seed.clone(),
@@ -139,6 +200,7 @@ export async function sampleWaterBasin(
     resolution,
     waterElevation,
     mask: rotatedMask,
-    wetCellCount
+    wetCellCount: sampled.wetCellCount,
+    touchesBoundary: sampled.touchesBoundary
   };
 }
