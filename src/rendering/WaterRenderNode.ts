@@ -24,6 +24,7 @@ type WaterNodeInternal = RenderNode & {
   center: Point | null;
   surfaceElevation: number | null;
   pendingImpact: { u: number; v: number; strength: number } | null;
+  sceneViewport: Int32Array | null;
   viewMatrix: Matrix4;
   modelMatrix: Matrix4;
   modelViewMatrix: Matrix4;
@@ -305,6 +306,7 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   center: null,
   surfaceElevation: null,
   pendingImpact: null,
+  sceneViewport: null,
 
   viewMatrix: new Matrix4(),
   modelMatrix: new Matrix4(),
@@ -560,6 +562,15 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.resetWebGLState();
     this.bindRenderTarget();
 
+    if (this.sceneViewport) {
+      gl.viewport(
+        this.sceneViewport[0],
+        this.sceneViewport[1],
+        this.sceneViewport[2],
+        this.sceneViewport[3]
+      );
+    }
+
     gl.enable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
@@ -611,6 +622,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   render(this: WaterNodeInternal) {
     this.resetWebGLState();
     const output = this.bindRenderTarget();
+    this.sceneViewport = new Int32Array(
+      this.gl.getParameter(this.gl.VIEWPORT) as Int32Array
+    );
 
     if (!this.waterTransform) {
       return output;
