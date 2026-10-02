@@ -259,7 +259,11 @@ const renderVertexSource = `#version 300 es
 
     vec3 p = vec3(aPosition, height);
     vHeight = height;
-    vNormal = normalize(vec3(left - right, down - up, 2.8));
+
+    // Exaggerate the visual slope a little. The simulated height remains
+    // untouched; this only makes wave normals easier to read at GIS scales.
+    vec2 slope = vec2(left - right, down - up) * 3.2;
+    vNormal = normalize(vec3(slope, 1.35));
 
     gl_Position = uProjection * uModelView * vec4(p, 1.0);
   }
@@ -274,17 +278,31 @@ const renderFragmentSource = `#version 300 es
 
   void main() {
     vec3 normal = normalize(vNormal);
-    vec3 lightDirection = normalize(vec3(0.35, 0.25, 0.90));
+    vec3 lightDirection = normalize(vec3(0.30, -0.25, 0.92));
+    vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
+
     float diffuse = max(dot(normal, lightDirection), 0.0);
-    float fresnelLike = pow(1.0 - max(normal.z, 0.0), 2.0);
+    float specular = pow(max(dot(normal, halfVector), 0.0), 28.0);
+    float slope = clamp(length(normal.xy) * 1.8, 0.0, 1.0);
 
-    vec3 deep = vec3(0.025, 0.16, 0.25);
-    vec3 crest = vec3(0.12, 0.48, 0.58);
-    float crestMix = clamp(abs(vHeight) * 0.18 + diffuse * 0.35, 0.0, 1.0);
-    vec3 color = mix(deep, crest, crestMix);
-    color += fresnelLike * vec3(0.08, 0.11, 0.13);
+    vec3 troughColor = vec3(0.018, 0.10, 0.18);
+    vec3 baseColor = vec3(0.025, 0.22, 0.32);
+    vec3 crestColor = vec3(0.30, 0.72, 0.78);
 
-    fragColor = vec4(color, 0.78);
+    float positiveCrest = smoothstep(0.08, 1.4, vHeight);
+    float negativeTrough = smoothstep(0.08, 1.2, -vHeight);
+
+    vec3 color = baseColor;
+    color = mix(color, crestColor, positiveCrest * 0.72);
+    color = mix(color, troughColor, negativeTrough * 0.78);
+
+    // The slope term makes moving wave fronts visible even when the height
+    // difference itself is small.
+    color += slope * vec3(0.05, 0.12, 0.15);
+    color *= 0.78 + diffuse * 0.32;
+    color += specular * vec3(0.65, 0.80, 0.85);
+
+    fragColor = vec4(color, 0.82);
   }
 `;
 
