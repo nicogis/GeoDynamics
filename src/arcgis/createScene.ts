@@ -11,6 +11,7 @@ import SimpleLineSymbol from "@arcgis/core/symbols/SimpleLineSymbol";
 import SimpleMarkerSymbol from "@arcgis/core/symbols/SimpleMarkerSymbol";
 
 import {
+  findAutomaticBasinSeed,
   resolveDamEndAtCrest,
   sampleWaterBasin,
   type DamBarrier
@@ -91,6 +92,7 @@ export async function createScene(container: string): Promise<SceneView> {
   const rockNode = createRockRenderNode(view);
   const waterNode = createWaterRenderNode(view);
   const status = document.querySelector<HTMLDivElement>("#status");
+  const help = document.querySelector<HTMLDivElement>("#help");
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -109,6 +111,119 @@ export async function createScene(container: string): Promise<SceneView> {
   let damGroundPreviewGraphic: Graphic | null = null;
   let damWaterLevelGraphic: Graphic | null = null;
   let basinRequestId = 0;
+
+  const writeHelp = (message: string) => {
+    if (help) {
+      help.textContent = message;
+    }
+  };
+
+  const applyBasin = async (
+    seed: Point,
+    source: "automatic" | "manual"
+  ) => {
+    if (!damBarrier) {
+      return;
+    }
+
+    const requestId = ++basinRequestId;
+    writeStatus(
+      source === "automatic"
+        ? "Detecting upstream reservoir..."
+        : "Sampling reservoir behind dam barrier..."
+    );
+
+    const basin = await sampleWaterBasin(view, seed, damBarrier);
+
+    if (requestId !== basinRequestId) {
+      return;
+    }
+
+    waterNode.setBasin(
+      basin.center,
+      basin.size,
+      basin.waterElevation,
+      basin.mask,
+      basin.resolution
+    );
+
+    const crestElevation = basin.damCrestElevation;
+    const profile = basin.damProfilePoints;
+
+    if (profile.length >= 2) {
+      const ring: number[][] = [];
+
+      for (const pointOnTerrain of profile) {
+        ring.push([
+          pointOnTerrain[0],
+          pointOnTerrain[1],
+          crestElevation
+        ]);
+      }
+
+      for (let i = profile.length - 1; i >= 0; i -= 1) {
+        const pointOnTerrain = profile[i];
+        ring.push([
+          pointOnTerrain[0],
+          pointOnTerrain[1],
+          pointOnTerrain[2]
+        ]);
+      }
+
+      ring.push(ring[0]);
+
+      damFaceLayer.removeAll();
+      damFaceLayer.add(
+        new Graphic({
+          geometry: new Polygon({
+            spatialReference: view.spatialReference,
+            rings: [ring]
+          }),
+          symbol: new PolygonSymbol3D({
+            symbolLayers: [
+              new FillSymbol3DLayer({
+                material: {
+                  color: [120, 105, 90, 0.88]
+                }
+              })
+            ]
+          })
+        })
+      );
+
+      const waterLevelLine = new Polyline({
+        spatialReference: view.spatialReference,
+        paths: [[
+          basin.waterLevelStart,
+          basin.waterLevelEnd
+        ]]
+      });
+
+      if (!damWaterLevelGraphic) {
+        damWaterLevelGraphic = new Graphic({
+          geometry: waterLevelLine,
+          symbol: new SimpleLineSymbol({
+            color: [80, 220, 255, 1],
+            width: 4
+          })
+        });
+        damLayer.add(damWaterLevelGraphic);
+      } else {
+        damWaterLevelGraphic.geometry = waterLevelLine;
+      }
+    }
+
+    const areaHa = basin.areaM2 / 10_000;
+    const volumeHm3 = basin.volumeM3 / 1_000_000;
+
+    writeStatus(
+      `Reservoir generated${source === "automatic" ? " automatically" : ""} — level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · dam ${basin.damLength.toFixed(0)} m · grid ${basin.resolution}×${basin.resolution} · ${basin.cellSize.toFixed(1)} m/cell · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³. Click normally to release the rock.`
+    );
+
+    writeHelp(
+      "Ctrl+click twice to draw a new dam. The reservoir is generated automatically when the upstream side can be detected. Shift+click upstream only as a manual fallback."
+    );
+  };
 
   const simulation = new RockfallSimulation(
     view,
@@ -348,110 +463,52 @@ export async function createScene(container: string): Promise<SceneView> {
         );
 
         writeStatus(
-          `Dam barrier set — ${damLength.toFixed(0)} m. Shift+click upstream to generate the reservoir.`
+          `Dam barrier set — ${damLength.toFixed(0)} m. Detecting upstream side...`
         );
+        writeHelp(
+          "GeoDynamics is trying to determine the upstream side and generate the reservoir automatically."
+        );
+
+        const automaticSeed = await findAutomaticBasinSeed(view, damBarrier);
+
+        if (automaticSeed) {
+          try {
+            await applyBasin(automaticSeed, "automatic");
+          } catch (error: unknown) {
+            console.warn("Automatic reservoir generation failed:", error);
+            writeStatus(
+              "Automatic reservoir detection was inconclusive. Shift+click a point in the upstream reservoir area.",
+              "error"
+            );
+            writeHelp(
+              "Shift+click a low point behind the dam to indicate the upstream reservoir area."
+            );
+          }
+        } else {
+          writeStatus(
+            "Unable to determine the upstream side automatically. Shift+click a point in the upstream reservoir area.",
+            "error"
+          );
+          writeHelp(
+            "Shift+click a low point behind the dam to indicate the upstream reservoir area."
+          );
+        }
         return;
       }
 
       if (event.native.shiftKey) {
         if (!damBarrier) {
           writeStatus(
-            "Define the dam first: Ctrl+click the two opposite valley sides."
+            "Define the dam first: Ctrl+click the two opposite valley sides.",
+            "error"
+          );
+          writeHelp(
+            "Ctrl+click the first side of the valley, then Ctrl+click the opposite side."
           );
           return;
         }
 
-        const requestId = ++basinRequestId;
-        writeStatus("Sampling reservoir behind dam barrier...");
-
-        const basin = await sampleWaterBasin(view, point, damBarrier);
-
-        if (requestId !== basinRequestId) {
-          return;
-        }
-
-        waterNode.setBasin(
-          basin.center,
-          basin.size,
-          basin.waterElevation,
-          basin.mask,
-          basin.resolution
-        );
-
-        const crestElevation = basin.damCrestElevation;
-        const profile = basin.damProfilePoints;
-
-        if (profile.length >= 2) {
-          const ring: number[][] = [];
-
-          for (const pointOnTerrain of profile) {
-            ring.push([
-              pointOnTerrain[0],
-              pointOnTerrain[1],
-              crestElevation
-            ]);
-          }
-
-          for (let i = profile.length - 1; i >= 0; i -= 1) {
-            const pointOnTerrain = profile[i];
-            ring.push([
-              pointOnTerrain[0],
-              pointOnTerrain[1],
-              pointOnTerrain[2]
-            ]);
-          }
-
-          ring.push(ring[0]);
-
-          damFaceLayer.removeAll();
-          damFaceLayer.add(
-            new Graphic({
-              geometry: new Polygon({
-                spatialReference: view.spatialReference,
-                rings: [ring]
-              }),
-              symbol: new PolygonSymbol3D({
-                symbolLayers: [
-                  new FillSymbol3DLayer({
-                    material: {
-                      color: [120, 105, 90, 0.88]
-                    }
-                  })
-                ]
-              })
-            })
-          );
-
-          const waterLevelLine = new Polyline({
-            spatialReference: view.spatialReference,
-            paths: [[
-              basin.waterLevelStart,
-              basin.waterLevelEnd
-            ]]
-          });
-
-          if (!damWaterLevelGraphic) {
-            damWaterLevelGraphic = new Graphic({
-              geometry: waterLevelLine,
-              symbol: new SimpleLineSymbol({
-                color: [80, 220, 255, 1],
-                width: 4
-              })
-            });
-            damLayer.add(damWaterLevelGraphic);
-          } else {
-            damWaterLevelGraphic.geometry = waterLevelLine;
-          }
-        }
-
-        const areaHa = basin.areaM2 / 10_000;
-        const volumeHm3 = basin.volumeM3 / 1_000_000;
-
-        writeStatus(
-          basin.touchesBoundary
-            ? `Reservoir still reaches the sampled domain edge at ${basin.size.toFixed(0)} m. Grid ${basin.resolution}×${basin.resolution} · ${basin.cellSize.toFixed(1)} m/cell. Check dam placement. Level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³.`
-            : `Reservoir generated — level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · dam ${basin.damLength.toFixed(0)} m · grid ${basin.resolution}×${basin.resolution} · ${basin.cellSize.toFixed(1)} m/cell · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³. Click normally to release the rock.`
-        );
+        await applyBasin(point, "manual");
         return;
       }
 
