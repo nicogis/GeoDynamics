@@ -323,6 +323,94 @@ async function estimateUpstreamSide(
   return difference > 0 ? 1 : -1;
 }
 
+export async function findAutomaticBasinSeed(
+  view: SceneView,
+  dam: DamBarrier,
+  freeboard = 1
+): Promise<Point | null> {
+  const upstreamSide = await estimateUpstreamSide(view, dam);
+  if (upstreamSide === 0) {
+    return null;
+  }
+
+  const crestElevation = dam.start.z;
+  if (crestElevation === undefined || !Number.isFinite(crestElevation)) {
+    return null;
+  }
+
+  const waterElevation = crestElevation - Math.max(freeboard, 0);
+  const dx = dam.end.x - dam.start.x;
+  const dy = dam.end.y - dam.start.y;
+  const length = Math.hypot(dx, dy);
+
+  if (length < 1) {
+    return null;
+  }
+
+  const tx = dx / length;
+  const ty = dy / length;
+  const nx = (-dy / length) * upstreamSide;
+  const ny = (dx / length) * upstreamSide;
+  const alongFractions = [0.35, 0.5, 0.65];
+  const offsets = [30, 60, 120, 240, 360];
+  const points: number[][] = [];
+
+  for (const offset of offsets) {
+    for (const fraction of alongFractions) {
+      const baseX = dam.start.x + dx * fraction;
+      const baseY = dam.start.y + dy * fraction;
+      points.push([
+        baseX + nx * offset + tx * 0,
+        baseY + ny * offset + ty * 0
+      ]);
+    }
+  }
+
+  const elevations = await queryElevations(
+    view,
+    points,
+    dam.start.spatialReference
+  );
+
+  let bestIndex = -1;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < elevations.length; i += 1) {
+    const elevation = elevations[i];
+    if (
+      elevation === undefined ||
+      !Number.isFinite(elevation) ||
+      elevation >= waterElevation
+    ) {
+      continue;
+    }
+
+    const offsetIndex = Math.floor(i / alongFractions.length);
+    const offset = offsets[offsetIndex] ?? offsets[offsets.length - 1];
+
+    // Prefer the nearest valid valley-floor point, with a small bias toward
+    // lower terrain so the seed lands inside the connected reservoir.
+    const depth = waterElevation - elevation;
+    const score = offset - Math.min(depth, 50) * 0.5;
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  if (bestIndex < 0) {
+    return null;
+  }
+
+  return new Point({
+    x: points[bestIndex][0],
+    y: points[bestIndex][1],
+    z: elevations[bestIndex],
+    spatialReference: dam.start.spatialReference
+  });
+}
+
 async function sampleDamProfile(
   view: SceneView,
   dam: DamBarrier,
