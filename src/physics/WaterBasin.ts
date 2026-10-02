@@ -267,6 +267,62 @@ export async function resolveDamEndAtCrest(
   );
 }
 
+async function estimateUpstreamSide(
+  view: SceneView,
+  dam: DamBarrier
+): Promise<-1 | 0 | 1> {
+  const dx = dam.end.x - dam.start.x;
+  const dy = dam.end.y - dam.start.y;
+  const length = Math.hypot(dx, dy);
+
+  if (length < 1) {
+    return 0;
+  }
+
+  const midX = (dam.start.x + dam.end.x) / 2;
+  const midY = (dam.start.y + dam.end.y) / 2;
+  const nx = -dy / length;
+  const ny = dx / length;
+  const offsets = [60, 120, 240];
+  const points: number[][] = [];
+
+  for (const distance of offsets) {
+    points.push([midX + nx * distance, midY + ny * distance]);
+  }
+  for (const distance of offsets) {
+    points.push([midX - nx * distance, midY - ny * distance]);
+  }
+
+  const elevations = await queryElevations(
+    view,
+    points,
+    dam.start.spatialReference
+  );
+
+  const plus = elevations.slice(0, offsets.length)
+    .filter((value) => Number.isFinite(value));
+  const minus = elevations.slice(offsets.length)
+    .filter((value) => Number.isFinite(value));
+
+  if (plus.length === 0 || minus.length === 0) {
+    return 0;
+  }
+
+  const average = (values: number[]) =>
+    values.reduce((sum, value) => sum + value, 0) / values.length;
+
+  const difference = average(plus) - average(minus);
+
+  // If the cross-valley terrain is almost symmetric, do not guess.
+  if (Math.abs(difference) < 2) {
+    return 0;
+  }
+
+  // The upstream valley generally rises away from the dam while the
+  // downstream side falls away. Positive normal corresponds to sideOfLine > 0.
+  return difference > 0 ? 1 : -1;
+}
+
 async function sampleDamProfile(
   view: SceneView,
   dam: DamBarrier,
@@ -555,6 +611,19 @@ export async function sampleWaterBasin(
     throw new Error("The dam barrier is too short.");
   }
 
+  const upstreamSide = await estimateUpstreamSide(view, dam);
+  const seedSide = Math.sign(sideOfLine(seed.x, seed.y, dam));
+
+  if (
+    upstreamSide !== 0 &&
+    seedSide !== 0 &&
+    seedSide !== upstreamSide
+  ) {
+    throw new Error(
+      "The selected point is downstream of the dam. Shift+click behind the barrier on the upstream side."
+    );
+  }
+
   const profile = await sampleDamProfile(view, dam);
   const waterElevation =
     profile.crestElevation - Math.max(freeboard, 0);
@@ -588,8 +657,14 @@ export async function sampleWaterBasin(
       waterElevation
     );
 
-    if (!sampled.touchesBoundary || size >= MAX_DOMAIN_SIZE) {
+    if (!sampled.touchesBoundary) {
       break;
+    }
+
+    if (size >= MAX_DOMAIN_SIZE) {
+      throw new Error(
+        `The reservoir does not close within ${MAX_DOMAIN_SIZE} m. Click upstream behind the dam or reposition the barrier.`
+      );
     }
 
     size = Math.min(size * 1.5, MAX_DOMAIN_SIZE);
