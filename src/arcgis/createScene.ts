@@ -19,6 +19,7 @@ import {
 import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
+import { createSimulationSettings } from "../config/SimulationSettings";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -91,6 +92,9 @@ export async function createScene(container: string): Promise<SceneView> {
 
   const rockNode = createRockRenderNode(view);
   const waterNode = createWaterRenderNode(view);
+  const settings = createSimulationSettings();
+  rockNode.setRadius(settings.rockRadius);
+
   const status = document.querySelector<HTMLDivElement>("#status");
   const help = document.querySelector<HTMLDivElement>("#help");
   const writeStatus = (
@@ -133,7 +137,12 @@ export async function createScene(container: string): Promise<SceneView> {
         : "Sampling reservoir behind dam barrier..."
     );
 
-    const basin = await sampleWaterBasin(view, seed, damBarrier);
+    const basin = await sampleWaterBasin(
+      view,
+      seed,
+      damBarrier,
+      settings
+    );
 
     if (requestId !== basinRequestId) {
       return;
@@ -225,6 +234,68 @@ export async function createScene(container: string): Promise<SceneView> {
     );
   };
 
+  const bindNumberSetting = (
+    id: string,
+    key: keyof typeof settings,
+    min: number,
+    max: number
+  ) => {
+    const input = document.querySelector<HTMLInputElement>(`#${id}`);
+    if (!input) {
+      return;
+    }
+
+    input.value = String(settings[key]);
+
+    const update = () => {
+      const parsed = Number(input.value);
+      if (!Number.isFinite(parsed)) {
+        input.value = String(settings[key]);
+        return;
+      }
+
+      const value = Math.min(Math.max(parsed, min), max);
+      input.value = String(value);
+      settings[key] = value;
+
+      if (key === "rockRadius") {
+        rockNode.setRadius(value);
+      }
+
+      writeHelp(
+        "Parameters updated. Basin settings apply to the next reservoir generation; rockfall settings apply to the next release."
+      );
+    };
+
+    input.addEventListener("change", update);
+  };
+
+  const bindResolutionSetting = () => {
+    const input = document.querySelector<HTMLSelectElement>(
+      "#maxBasinResolution"
+    );
+    if (!input) {
+      return;
+    }
+
+    input.value = String(settings.maxBasinResolution);
+    input.addEventListener("change", () => {
+      settings.maxBasinResolution = Number(input.value);
+      writeHelp(
+        "Parameters updated. Basin settings apply to the next reservoir generation."
+      );
+    });
+  };
+
+  bindNumberSetting("reservoirFreeboard", "reservoirFreeboard", 0, 50);
+  bindNumberSetting("maxBasinExtent", "maxBasinExtent", 500, 8000);
+  bindNumberSetting("targetDemCellSize", "targetDemCellSize", 1, 25);
+  bindNumberSetting("rockRadius", "rockRadius", 1, 50);
+  bindNumberSetting("rockDensity", "rockDensity", 500, 6000);
+  bindNumberSetting("releaseHeight", "releaseHeight", 0, 250);
+  bindNumberSetting("waterDragRate", "waterDragRate", 0, 10);
+  bindResolutionSetting();
+
   const simulation = new RockfallSimulation(
     view,
     rockNode,
@@ -312,7 +383,8 @@ export async function createScene(container: string): Promise<SceneView> {
       getSurface: () => waterNode.getSurface(),
       containsPoint: (point) => waterNode.containsPoint(point),
       addImpact: (point, speed) => waterNode.addImpact(point, speed)
-    }
+    },
+    settings
   );
 
   view.on("pointer-move", (event) => {
@@ -469,7 +541,11 @@ export async function createScene(container: string): Promise<SceneView> {
           "GeoDynamics is trying to determine the upstream side and generate the reservoir automatically."
         );
 
-        const automaticSeed = await findAutomaticBasinSeed(view, damBarrier);
+        const automaticSeed = await findAutomaticBasinSeed(
+          view,
+          damBarrier,
+          settings
+        );
 
         if (automaticSeed) {
           try {
