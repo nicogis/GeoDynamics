@@ -2,10 +2,9 @@ import Multipoint from "@arcgis/core/geometry/Multipoint";
 import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 
-const TARGET_CELL_SIZE = 5;
+import type { SimulationSettings } from "../config/SimulationSettings";
+
 const MIN_RESOLUTION = 128;
-const MAX_RESOLUTION = 1024;
-const MAX_DOMAIN_SIZE = 4000;
 const ELEVATION_BATCH_SIZE = 16384;
 const DOMAIN_MARGIN = 180;
 
@@ -86,9 +85,17 @@ function nextPowerOfTwo(value: number): number {
   return 2 ** Math.ceil(Math.log2(Math.max(value, 1)));
 }
 
-function resolutionForSize(size: number): number {
-  const desired = nextPowerOfTwo(Math.ceil(size / TARGET_CELL_SIZE));
-  return Math.min(Math.max(desired, MIN_RESOLUTION), MAX_RESOLUTION);
+function resolutionForSize(
+  size: number,
+  settings: SimulationSettings
+): number {
+  const desired = nextPowerOfTwo(
+    Math.ceil(size / settings.targetDemCellSize)
+  );
+  return Math.min(
+    Math.max(desired, MIN_RESOLUTION),
+    settings.maxBasinResolution
+  );
 }
 
 function createSamplingCenter(
@@ -326,7 +333,7 @@ async function estimateUpstreamSide(
 export async function findAutomaticBasinSeed(
   view: SceneView,
   dam: DamBarrier,
-  freeboard = 1
+  settings: SimulationSettings
 ): Promise<Point | null> {
   const upstreamSide = await estimateUpstreamSide(view, dam);
   if (upstreamSide === 0) {
@@ -338,7 +345,8 @@ export async function findAutomaticBasinSeed(
     return null;
   }
 
-  const waterElevation = crestElevation - Math.max(freeboard, 0);
+  const waterElevation =
+    crestElevation - Math.max(settings.reservoirFreeboard, 0);
   const dx = dam.end.x - dam.start.x;
   const dy = dam.end.y - dam.start.y;
   const length = Math.hypot(dx, dy);
@@ -684,7 +692,7 @@ export async function sampleWaterBasin(
   view: SceneView,
   seed: Point,
   dam: DamBarrier,
-  freeboard = 1
+  settings: SimulationSettings
 ): Promise<SampledWaterBasin> {
   if (!seed.spatialReference.isWebMercator) {
     throw new Error("The current POC expects a Web Mercator SceneView.");
@@ -714,7 +722,7 @@ export async function sampleWaterBasin(
 
   const profile = await sampleDamProfile(view, dam);
   const waterElevation =
-    profile.crestElevation - Math.max(freeboard, 0);
+    profile.crestElevation - Math.max(settings.reservoirFreeboard, 0);
 
   const seedElevation = seed.z;
   if (
@@ -728,12 +736,15 @@ export async function sampleWaterBasin(
   }
 
   const center = createSamplingCenter(seed, dam);
-  let size = Math.min(initialDomainSize(seed, dam), MAX_DOMAIN_SIZE);
-  let resolution = resolutionForSize(size);
+  let size = Math.min(
+    initialDomainSize(seed, dam),
+    settings.maxBasinExtent
+  );
+  let resolution = resolutionForSize(size, settings);
   let sampled: BasinSample;
 
   while (true) {
-    resolution = resolutionForSize(size);
+    resolution = resolutionForSize(size, settings);
 
     sampled = await sampleConnectedMask(
       view,
@@ -749,13 +760,13 @@ export async function sampleWaterBasin(
       break;
     }
 
-    if (size >= MAX_DOMAIN_SIZE) {
+    if (size >= settings.maxBasinExtent) {
       throw new Error(
-        `The reservoir does not close within ${MAX_DOMAIN_SIZE} m. Click upstream behind the dam or reposition the barrier.`
+        `The reservoir does not close within ${settings.maxBasinExtent} m. Click upstream behind the dam or reposition the barrier.`
       );
     }
 
-    size = Math.min(size * 1.5, MAX_DOMAIN_SIZE);
+    size = Math.min(size * 1.5, settings.maxBasinExtent);
   }
 
   const levelSpan = waterLevelSpan(
