@@ -4,8 +4,8 @@ import SceneView from "@arcgis/core/views/SceneView";
 
 const TARGET_CELL_SIZE = 5;
 const MIN_RESOLUTION = 128;
-const MAX_RESOLUTION = 512;
-const MAX_DOMAIN_SIZE = 2400;
+const MAX_RESOLUTION = 1024;
+const MAX_DOMAIN_SIZE = 4000;
 const ELEVATION_BATCH_SIZE = 16384;
 const DOMAIN_MARGIN = 180;
 
