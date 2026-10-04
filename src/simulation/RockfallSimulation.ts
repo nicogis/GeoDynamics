@@ -23,7 +23,6 @@ const ROCK_HULL_VERTICES = new Float32Array([
    9.5,  0.9,  1.8,
   -9.2, -0.6, -0.8
 ]);
-const this.settings.releaseHeight = 30;
 const FIXED_TIMESTEP = 1 / 60;
 const TRAJECTORY_MIN_STEP = 5;
 const STATUS_INTERVAL_MS = 250;
