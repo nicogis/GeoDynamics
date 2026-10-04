@@ -36,7 +36,7 @@ The next scenario will extend the experiment with a water basin and barrier, con
 
 ## Current POC
 
-Use **Ctrl + click** twice to define the dam across the valley, then **Shift + click** upstream to generate the reservoir behind it. Click normally to release the boulder. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
+Use **Ctrl + click** on one side of the valley to set the first dam abutment, then **Ctrl + click** on the opposite side to close the barrier. While positioning the second point, GeoDynamics previews both the horizontal crest and its ground projection. After the second Ctrl + click, GeoDynamics tries to detect the upstream side automatically and generate the reservoir. If automatic detection is inconclusive, use **Shift + click** on a low point behind the dam to provide the upstream reservoir seed manually. Click normally to release the boulder. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
 
 The physical coordinate system is intentionally local:
 
@@ -101,10 +101,14 @@ ArcGIS SceneView
       |
       +-- dam GraphicsLayer
       |       +-- Ctrl + click first abutment
+      |       +-- live crest + terrain projection preview
       |       +-- Ctrl + click opposite abutment
+      |       +-- horizontal crest / terrain intersection
       |
       +-- WaterRenderNode
-      |       +-- Shift + click upstream reservoir seed
+      |       +-- automatic upstream-side detection
+      |       +-- automatic reservoir generation
+      |       +-- Shift + click manual upstream seed fallback
       |       +-- dam-constrained DEM flood fill
       |       +-- crest-derived water level
       |       +-- animated WebGL water surface
