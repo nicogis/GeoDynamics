@@ -31,7 +31,7 @@ body {
   font-size: 30px;
 }
 
-.panel p, #help, #status {
+.panel p, #help, #status, .settings {
   margin: 0;
   color: rgba(255, 255, 255, 0.72);
   line-height: 1.5;
@@ -41,6 +41,66 @@ body {
   font-size: 11px;
   letter-spacing: 0.16em;
   opacity: 0.6;
+}
+
+.settings {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 13px;
+}
+
+.settings summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #f6f7f8;
+}
+
+.settings-section {
+  margin-top: 14px;
+}
+
+.settings-title {
+  margin-bottom: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+}
+
+.setting-row span {
+  min-width: 0;
+}
+
+.setting-row small {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.setting-row input,
+.setting-row select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  color: #f6f7f8;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.setting-row input:focus,
+.setting-row select:focus {
+  outline: 2px solid rgba(80, 220, 255, 0.5);
+  outline-offset: 1px;
 }
 
 #help {
