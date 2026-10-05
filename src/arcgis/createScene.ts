@@ -110,6 +110,7 @@ export async function createScene(container: string): Promise<SceneView> {
   const status = document.querySelector<HTMLDivElement>("#status");
   const help = document.querySelector<HTMLDivElement>("#help");
   const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
+  const downstream = document.querySelector<HTMLDivElement>("#downstream");
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -173,6 +174,10 @@ export async function createScene(container: string): Promise<SceneView> {
 
     downstreamTraceStarted = false;
     downstreamLayer.removeAll();
+    if (downstream) {
+      downstream.textContent = "Downstream: waiting for overtopping.";
+      downstream.dataset.state = "waiting";
+    }
 
     waterNode.setDamMonitor(
       damBarrier.start,
@@ -196,6 +201,10 @@ export async function createScene(container: string): Promise<SceneView> {
           damBarrier
         ) {
           downstreamTraceStarted = true;
+          if (downstream) {
+            downstream.textContent = "Downstream: tracing overtopping flow...";
+            downstream.dataset.state = "active";
+          }
 
           const source = new Point({
             x:
@@ -235,6 +244,11 @@ export async function createScene(container: string): Promise<SceneView> {
                   }
                 })
               );
+
+              if (downstream) {
+                downstream.textContent = `Downstream: path traced — ${flow.lengthM.toFixed(0)} m. Building inundation surface...`;
+                downstream.dataset.state = "active";
+              }
 
               const overtoppingHead = Math.max(
                 state.maxWaveHeight - state.freeboard,
@@ -308,10 +322,20 @@ export async function createScene(container: string): Promise<SceneView> {
                   writeHelp(
                     `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
                   );
+                  if (downstream) {
+                    downstream.textContent =
+                      `Downstream: inundation surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha.`;
+                    downstream.dataset.state = "active";
+                  }
                 } else {
                   writeHelp(
                     `Downstream path generated (${flow.lengthM.toFixed(0)} m), but the first inundation envelope is too narrow to render reliably.`
                   );
+                  if (downstream) {
+                    downstream.textContent =
+                      "Downstream: path ready, inundation surface too narrow.";
+                    downstream.dataset.state = "error";
+                  }
                 }
               } catch (surfaceError: unknown) {
                 console.warn(
@@ -323,6 +347,10 @@ export async function createScene(container: string): Promise<SceneView> {
                     ? `Downstream path generated, but inundation surface failed: ${surfaceError.message}`
                     : "Downstream path generated, but inundation surface failed."
                 );
+                if (downstream) {
+                  downstream.textContent = "Downstream: inundation surface failed.";
+                  downstream.dataset.state = "error";
+                }
               }
             })
             .catch((error: unknown) => {
@@ -333,6 +361,10 @@ export async function createScene(container: string): Promise<SceneView> {
                   ? `Overtopping detected, but downstream tracing failed: ${error.message}`
                   : "Overtopping detected, but downstream tracing failed."
               );
+              if (downstream) {
+                downstream.textContent = "Downstream: flow tracing failed.";
+                downstream.dataset.state = "error";
+              }
             });
         }
       }
@@ -653,6 +685,10 @@ export async function createScene(container: string): Promise<SceneView> {
           damFaceLayer.removeAll();
           downstreamLayer.removeAll();
           downstreamTraceStarted = false;
+          if (downstream) {
+            downstream.textContent = "Downstream: waiting for overtopping.";
+            downstream.dataset.state = "waiting";
+          }
           damWaterLevelGraphic = null;
           if (overtopping) {
             overtopping.textContent = "Dam wave monitor — waiting for reservoir.";
