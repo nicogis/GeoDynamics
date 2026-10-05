@@ -28,13 +28,15 @@ The next scenario will extend the experiment with a water basin and barrier, con
 6. **Higher-fidelity rockfall physics** — 129 × 129 terrain sampling and irregular convex rock collider. ✅
 7. **Water surface base** — explicitly placed animated WebGL water patch. ✅
 8. **Water impact** — rock/water intersection, impact-generated ripples, drag and buoyancy coupling. ✅
-9. **Persistent GPU water state** — ping-pong floating-point textures storing wave height and vertical velocity. 🚧
-10. **Barrier / overtopping** — simplified overflow propagation.
-11. **GIS outputs** — trajectories, impact energy and hazard surfaces.
+9. **Persistent GPU water state** — ping-pong floating-point textures storing wave height and vertical velocity. ✅
+10. **Terrain-aware basin** — ArcGIS DEM mask + connected wet cells around the selected seed. ✅
+11. **Dam-constrained reservoir** — explicit barrier across the valley closes the flood-fill and derives the reservoir level from the dam crest. 🚧
+12. **Barrier / overtopping** — simplified overflow propagation.
+13. **GIS outputs** — trajectories, impact energy and hazard surfaces.
 
 ## Current POC
 
-Use **Shift + click** to place the water basin, then click normally to release the boulder. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
+Use **Ctrl + click** on one side of the valley to set the first dam abutment, then **Ctrl + click** on the opposite side to close the barrier. While positioning the second point, GeoDynamics previews both the horizontal crest and its ground projection. After the second Ctrl + click, GeoDynamics tries to detect the upstream side automatically and generate the reservoir. If automatic detection is inconclusive, use **Shift + click** on a low point behind the dam to provide the upstream reservoir seed manually. Click normally to release the boulder. The on-screen panel exposes runtime parameters for reservoir freeboard, maximum basin extent, DEM target cell size, maximum basin resolution, rock radius, rock density, release height and water drag; changes apply to the next reservoir generation or rockfall release without rebuilding the app. GeoDynamics samples a 2400 × 2400 metre grid from ArcGIS World Elevation, converts it into a local Rapier triangle mesh, creates a dynamic irregular convex-hull collider for the boulder and advances the simulation at a fixed 60 Hz. The trajectory is recorded as a 3D ArcGIS polyline with live runout, path-length and speed telemetry. When the boulder comes to rest or leaves the sampled domain, GeoDynamics writes a result point with runout, elevation drop, maximum speed, estimated rock mass and peak kinetic energy.
 
 The physical coordinate system is intentionally local:
 
@@ -97,13 +99,25 @@ ArcGIS SceneView
       |       +-- elevation drop / rock mass
       |       +-- peak kinetic energy
       |
+      +-- dam GraphicsLayer
+      |       +-- Ctrl + click first abutment
+      |       +-- live crest + terrain projection preview
+      |       +-- Ctrl + click opposite abutment
+      |       +-- horizontal crest / terrain intersection
+      |
       +-- WaterRenderNode
-      |       +-- Shift + click basin placement
+      |       +-- automatic upstream-side detection
+      |       +-- automatic reservoir generation
+      |       +-- Shift + click manual upstream seed fallback
+      |       +-- dam-constrained DEM flood fill
+      |       +-- crest-derived water level
       |       +-- animated WebGL water surface
+      |       +-- ArcGIS DEM sampling around the basin seed
+      |       +-- connected wet-cell mask below the water level
       |       +-- floating-point ping-pong state textures
       |       +-- persistent height / velocity propagation
       |       +-- impact injection into GPU state
-      |       +-- water footprint / surface query
+      |       +-- masked water physics / rendering
       |
       +-- RockRenderNode
               |

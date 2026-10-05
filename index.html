@@ -12,7 +12,70 @@
       <div class="eyebrow">GEOSPATIAL PHYSICS LAB</div>
       <h1>GeoDynamics</h1>
       <p>ArcGIS terrain + WebGL physics experiments.</p>
-      <div id="status">Click the terrain to inspect a potential release point.</div>
+
+      <details class="settings" open>
+        <summary>Simulation parameters</summary>
+
+        <div class="settings-section">
+          <div class="settings-title">Dam / reservoir</div>
+
+          <label class="setting-row">
+            <span>Freeboard <small>m</small></span>
+            <input id="reservoirFreeboard" type="number" min="0" max="50" step="0.5" />
+          </label>
+
+          <label class="setting-row">
+            <span>Max basin extent <small>m</small></span>
+            <input id="maxBasinExtent" type="number" min="500" max="8000" step="100" />
+          </label>
+
+          <label class="setting-row">
+            <span>DEM target cell <small>m</small></span>
+            <input id="targetDemCellSize" type="number" min="1" max="25" step="0.5" />
+          </label>
+
+          <label class="setting-row">
+            <span>Max resolution</span>
+            <select id="maxBasinResolution">
+              <option value="128">128</option>
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="1024">1024</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-title">Rockfall</div>
+
+          <label class="setting-row">
+            <span>Rock radius <small>m</small></span>
+            <input id="rockRadius" type="number" min="1" max="50" step="1" />
+          </label>
+
+          <label class="setting-row">
+            <span>Rock density <small>kg/m³</small></span>
+            <input id="rockDensity" type="number" min="500" max="6000" step="50" />
+          </label>
+
+          <label class="setting-row">
+            <span>Release height <small>m</small></span>
+            <input id="releaseHeight" type="number" min="0" max="250" step="5" />
+          </label>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-title">Water</div>
+
+          <label class="setting-row">
+            <span>Drag coefficient</span>
+            <input id="waterDragRate" type="number" min="0" max="10" step="0.05" />
+          </label>
+        </div>
+      </details>
+
+      <div id="help">Ctrl+click twice to draw a dam across the valley. GeoDynamics will try to detect the upstream side and generate the reservoir automatically.</div>
+      <div id="status">Ready.</div>
     </aside>
     <script type="module" src="/src/main.ts"></script>
   </body>

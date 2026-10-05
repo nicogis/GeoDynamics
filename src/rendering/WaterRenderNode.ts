@@ -17,9 +17,13 @@ type WaterNodeInternal = RenderNode & {
   quadBuffer: WebGLBuffer | null;
   stateTextures: [WebGLTexture | null, WebGLTexture | null];
   stateFramebuffers: [WebGLFramebuffer | null, WebGLFramebuffer | null];
+  maskTexture: WebGLTexture | null;
+  basinMask: Uint8Array | null;
+  basinResolution: number;
   activeState: number;
   vertexCount: number;
   initializedResources: boolean;
+  meshSize: number;
   size: number;
   center: Point | null;
   surfaceElevation: number | null;
@@ -28,10 +32,19 @@ type WaterNodeInternal = RenderNode & {
   viewMatrix: Matrix4;
   modelMatrix: Matrix4;
   modelViewMatrix: Matrix4;
-  setWater(center: Point, size?: number): void;
+  setBasin(
+    center: Point,
+    size: number,
+    elevation: number,
+    mask: Uint8Array,
+    resolution: number
+  ): void;
+  containsPoint(point: Point): boolean;
   addImpact(point: Point, speed: number): void;
   getSurface(): { center: Point; size: number; elevation: number } | null;
   ensureResources(): void;
+  rebuildMesh(): void;
+  uploadBasinMask(): void;
   resetWaterState(): void;
   runImpactPass(): void;
   runSimulationStep(): void;
@@ -115,6 +128,21 @@ function createStateTexture(gl: WebGL2RenderingContext): WebGLTexture {
   return texture;
 }
 
+function createMaskTexture(gl: WebGL2RenderingContext): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error("Unable to create water mask texture.");
+  }
+
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  return texture;
+}
+
 function createStateFramebuffer(
   gl: WebGL2RenderingContext,
   texture: WebGLTexture
@@ -186,21 +214,42 @@ const simulationFragmentSource = `#version 300 es
   precision highp float;
 
   uniform sampler2D uState;
+  uniform sampler2D uMask;
   uniform vec2 uTexel;
   in vec2 vUv;
   out vec4 outState;
 
   void main() {
     vec2 state = texture(uState, vUv).rg;
+    float wet = texture(uMask, vUv).r;
+
+    if (wet < 0.5) {
+      outState = vec4(0.0, 0.0, 0.0, 1.0);
+      return;
+    }
+
     float height = state.r;
     float velocity = state.g;
 
-    float average = (
-      texture(uState, vUv + vec2(uTexel.x, 0.0)).r +
-      texture(uState, vUv - vec2(uTexel.x, 0.0)).r +
-      texture(uState, vUv + vec2(0.0, uTexel.y)).r +
-      texture(uState, vUv - vec2(0.0, uTexel.y)).r
-    ) * 0.25;
+    vec2 leftUv = vUv - vec2(uTexel.x, 0.0);
+    vec2 rightUv = vUv + vec2(uTexel.x, 0.0);
+    vec2 downUv = vUv - vec2(0.0, uTexel.y);
+    vec2 upUv = vUv + vec2(0.0, uTexel.y);
+
+    float left = texture(uMask, leftUv).r > 0.5
+      ? texture(uState, leftUv).r
+      : height;
+    float right = texture(uMask, rightUv).r > 0.5
+      ? texture(uState, rightUv).r
+      : height;
+    float down = texture(uMask, downUv).r > 0.5
+      ? texture(uState, downUv).r
+      : height;
+    float up = texture(uMask, upUv).r > 0.5
+      ? texture(uState, upUv).r
+      : height;
+
+    float average = (left + right + down + up) * 0.25;
 
     velocity += (average - height) * 1.65;
     velocity *= 0.992;
@@ -216,6 +265,7 @@ const impactFragmentSource = `#version 300 es
   const float PI = 3.141592653589793;
 
   uniform sampler2D uState;
+  uniform sampler2D uMask;
   uniform vec2 uCenter;
   uniform float uRadius;
   uniform float uStrength;
@@ -225,6 +275,12 @@ const impactFragmentSource = `#version 300 es
 
   void main() {
     vec2 state = texture(uState, vUv).rg;
+
+    if (texture(uMask, vUv).r < 0.5) {
+      outState = vec4(state, 0.0, 1.0);
+      return;
+    }
+
     float normalizedDistance = distance(vUv, uCenter) / uRadius;
     float drop = max(0.0, 1.0 - normalizedDistance);
     drop = 0.5 - cos(drop * PI) * 0.5;
@@ -243,15 +299,18 @@ const renderVertexSource = `#version 300 es
   in vec2 aUv;
 
   uniform sampler2D uState;
+  uniform sampler2D uMask;
   uniform mat4 uProjection;
   uniform mat4 uModelView;
   uniform vec2 uTexel;
 
   out float vHeight;
+  out vec2 vUv;
   out vec3 vNormal;
 
   void main() {
     float height = texture(uState, aUv).r;
+    vUv = aUv;
     float left = texture(uState, aUv - vec2(uTexel.x, 0.0)).r;
     float right = texture(uState, aUv + vec2(uTexel.x, 0.0)).r;
     float down = texture(uState, aUv - vec2(0.0, uTexel.y)).r;
@@ -272,11 +331,22 @@ const renderVertexSource = `#version 300 es
 const renderFragmentSource = `#version 300 es
   precision highp float;
 
+  uniform sampler2D uMask;
+
   in float vHeight;
+  in vec2 vUv;
   in vec3 vNormal;
   out vec4 fragColor;
 
   void main() {
+    // Clip at fragment resolution rather than interpolating a wet/dry flag
+    // from the 128x128 render mesh. This keeps a 256/512 DEM mask aligned
+    // with the terrain shoreline and prevents triangles from bleeding across
+    // the dam or smoothing over narrow terrain features.
+    if (texture(uMask, vUv).r < 0.5) {
+      discard;
+    }
+
     vec3 normal = normalize(vNormal);
     vec3 lightDirection = normalize(vec3(0.30, -0.25, 0.92));
     vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
@@ -317,9 +387,13 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   quadBuffer: null,
   stateTextures: [null, null],
   stateFramebuffers: [null, null],
+  maskTexture: null,
+  basinMask: null,
+  basinResolution: WATER_TEXTURE_SIZE,
   activeState: 0,
   vertexCount: 0,
   initializedResources: false,
+  meshSize: 0,
   size: 420,
   center: null,
   surfaceElevation: null,
@@ -335,13 +409,22 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.produces = "opaque-color";
   },
 
-  setWater(this: WaterNodeInternal, center: Point, size = 420) {
+  setBasin(
+    this: WaterNodeInternal,
+    center: Point,
+    size: number,
+    elevation: number,
+    mask: Uint8Array,
+    resolution: number
+  ) {
     this.size = size;
     this.center = center.clone();
-    this.surfaceElevation = (center.z ?? 0) + 4;
+    this.surfaceElevation = elevation;
+    this.basinMask = mask.slice();
+    this.basinResolution = resolution;
 
     const surfacePoint = center.clone();
-    surfacePoint.z = this.surfaceElevation;
+    surfacePoint.z = elevation;
 
     const transform = webgl.renderCoordinateTransformAt(
       this.view,
@@ -354,10 +437,39 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.pendingImpact = null;
 
     if (this.initializedResources) {
+      if (this.meshSize !== this.size) {
+        this.rebuildMesh();
+      }
+      this.uploadBasinMask();
       this.resetWaterState();
     }
 
     this.requestRender();
+  },
+
+  containsPoint(this: WaterNodeInternal, point: Point) {
+    if (!this.center || !this.basinMask) {
+      return false;
+    }
+
+    const half = this.size / 2;
+    const mapU = (point.x - this.center.x + half) / this.size;
+    const mapV = (point.y - this.center.y + half) / this.size;
+
+    if (mapU < 0 || mapU >= 1 || mapV < 0 || mapV >= 1) {
+      return false;
+    }
+
+    const col = Math.min(
+      Math.floor(mapU * this.basinResolution),
+      this.basinResolution - 1
+    );
+    const row = Math.min(
+      Math.floor(mapV * this.basinResolution),
+      this.basinResolution - 1
+    );
+
+    return this.basinMask[row * this.basinResolution + col] !== 0;
   },
 
   addImpact(this: WaterNodeInternal, point: Point, speed: number) {
@@ -366,12 +478,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     }
 
     const half = this.size / 2;
-    const localX = point.x - this.center.x;
-    const localY = point.y - this.center.y;
+    const mapU = (point.x - this.center.x + half) / this.size;
+    const mapV = (point.y - this.center.y + half) / this.size;
 
     this.pendingImpact = {
-      u: Math.min(Math.max((localX + half) / this.size, 0), 1),
-      v: Math.min(Math.max((localY + half) / this.size, 0), 1),
+      u: Math.min(Math.max(mapU, 0), 1),
+      v: Math.min(Math.max(mapV, 0), 1),
       strength: Math.min(Math.max(speed * 0.055, 0.6), 3.5)
     };
 
@@ -421,11 +533,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       impactFragmentSource
     );
 
-    const mesh = createWaterMesh(this.size);
     this.meshBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
-    this.vertexCount = mesh.length / 4;
+    this.rebuildMesh();
 
     this.quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
@@ -449,9 +558,49 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       createStateFramebuffer(gl, textureA),
       createStateFramebuffer(gl, textureB)
     ];
+    this.maskTexture = createMaskTexture(gl);
 
     this.initializedResources = true;
+    this.uploadBasinMask();
     this.resetWaterState();
+  },
+
+  rebuildMesh(this: WaterNodeInternal) {
+    if (!this.meshBuffer) {
+      return;
+    }
+
+    const mesh = createWaterMesh(this.size);
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+    this.vertexCount = mesh.length / 4;
+    this.meshSize = this.size;
+  },
+
+  uploadBasinMask(this: WaterNodeInternal) {
+    if (!this.maskTexture) {
+      return;
+    }
+
+    const gl = this.gl;
+    const resolution = this.basinResolution;
+    const data =
+      this.basinMask ??
+      new Uint8Array(resolution * resolution).fill(255);
+
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R8,
+      resolution,
+      resolution,
+      0,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      data
+    );
   },
 
   resetWaterState(this: WaterNodeInternal) {
@@ -505,6 +654,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.stateTextures[source]);
     gl.uniform1i(gl.getUniformLocation(this.impactProgram, "uState"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
+    gl.uniform1i(gl.getUniformLocation(this.impactProgram, "uMask"), 1);
     gl.uniform2f(
       gl.getUniformLocation(this.impactProgram, "uCenter"),
       this.pendingImpact.u,
@@ -554,6 +706,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     gl.uniform1i(
       gl.getUniformLocation(this.simulationProgram, "uState"),
       0
+    );
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
+    gl.uniform1i(
+      gl.getUniformLocation(this.simulationProgram, "uMask"),
+      1
     );
     gl.uniform2f(
       gl.getUniformLocation(this.simulationProgram, "uTexel"),
@@ -614,6 +772,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.stateTextures[this.activeState]);
     gl.uniform1i(gl.getUniformLocation(this.renderProgram, "uState"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
+    gl.uniform1i(gl.getUniformLocation(this.renderProgram, "uMask"), 1);
     gl.uniform2f(
       gl.getUniformLocation(this.renderProgram, "uTexel"),
       1 / WATER_TEXTURE_SIZE,

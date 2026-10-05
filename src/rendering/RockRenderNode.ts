@@ -37,6 +37,7 @@ type RockNodeInternal = RenderNode & {
   poseMatrix: Matrix4;
   rotationMatrix: Matrix4;
   rockQuaternion: Quaternion;
+  setRadius(radius: number): void;
   setRock(point: Point): void;
   setRockPose(point: Point, rotation?: RotationLike): void;
   ensureResources(): void;
@@ -221,6 +222,36 @@ const RockRenderNodeClass = RenderNode.createSubclass({
   initialize(this: RockNodeInternal) {
     this.consumes.required.push("opaque-color");
     this.produces = "opaque-color";
+  },
+
+  setRadius(this: RockNodeInternal, radius: number) {
+    const nextRadius = Math.max(radius, 0.5);
+    if (Math.abs(nextRadius - this.radius) < 0.001) {
+      return;
+    }
+
+    this.radius = nextRadius;
+
+    if (this.initializedResources) {
+      const gl = this.gl;
+      if (this.positionBuffer) {
+        gl.deleteBuffer(this.positionBuffer);
+      }
+      if (this.normalBuffer) {
+        gl.deleteBuffer(this.normalBuffer);
+      }
+      if (this.program) {
+        gl.deleteProgram(this.program);
+      }
+
+      this.positionBuffer = null;
+      this.normalBuffer = null;
+      this.program = null;
+      this.initializedResources = false;
+      this.vertexCount = 0;
+    }
+
+    this.requestRender();
   },
 
   setRock(this: RockNodeInternal, point: Point) {
