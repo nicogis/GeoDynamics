@@ -31,7 +31,7 @@ body {
   font-size: 30px;
 }
 
-.panel p, #help, #overtopping, #status, .settings {
+.panel p, #help, #overtopping, #downstream, #status, .settings {
   margin: 0;
   color: rgba(255, 255, 255, 0.72);
   line-height: 1.5;
@@ -120,6 +120,25 @@ body {
   color: #ff8b8b;
   background: rgba(180, 30, 30, 0.22);
   font-weight: 700;
+}
+
+#downstream {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#downstream[data-state="active"] {
+  color: #8fe8ff;
+  background: rgba(0, 145, 190, 0.18);
+  font-weight: 700;
+}
+
+#downstream[data-state="error"] {
+  color: #ffb0b0;
+  background: rgba(180, 30, 30, 0.18);
 }
 
 #status {
