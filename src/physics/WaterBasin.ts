@@ -104,16 +104,36 @@ function resolutionForSize(
 
 function createSamplingCenter(
   seed: Point,
-  dam: DamBarrier
+  dam: DamBarrier,
+  size: number
 ): Point {
-  const minX = Math.min(seed.x, dam.start.x, dam.end.x);
-  const maxX = Math.max(seed.x, dam.start.x, dam.end.x);
-  const minY = Math.min(seed.y, dam.start.y, dam.end.y);
-  const maxY = Math.max(seed.y, dam.start.y, dam.end.y);
+  const dx = dam.end.x - dam.start.x;
+  const dy = dam.end.y - dam.start.y;
+  const damLength = Math.hypot(dx, dy);
+
+  if (damLength < 1) {
+    return seed.clone();
+  }
+
+  const midX = (dam.start.x + dam.end.x) / 2;
+  const midY = (dam.start.y + dam.end.y) / 2;
+  const seedSideValue = sideOfLine(seed.x, seed.y, dam);
+  const seedSide = Math.sign(seedSideValue) || 1;
+  const nx = (-dy / damLength) * seedSide;
+  const ny = (dx / damLength) * seedSide;
+  const seedNormalDistance = Math.abs(seedSideValue) / damLength;
+
+  // Keep the sampling frame anchored to the dam rather than to the seed.
+  // The seed selects the connected component; it should not be able to drag
+  // or visually "rotate" the reservoir domain when it happens to be far away.
+  const upstreamOffset = Math.min(
+    Math.max(seedNormalDistance * 0.35, size * 0.16),
+    size * 0.30
+  );
 
   return new Point({
-    x: (minX + maxX) / 2,
-    y: (minY + maxY) / 2,
+    x: midX + nx * upstreamOffset,
+    y: midY + ny * upstreamOffset,
     z: seed.z,
     spatialReference: seed.spatialReference
   });
@@ -664,11 +684,19 @@ async function sampleConnectedMask(
     tryAdd(row + 1, col);
     tryAdd(row, col - 1);
     tryAdd(row, col + 1);
+
+    // Diagonal connectivity avoids visually broken reservoirs when a narrow
+    // concave valley or one-cell saddle is represented diagonally in the DEM.
+    tryAdd(row - 1, col - 1);
+    tryAdd(row - 1, col + 1);
+    tryAdd(row + 1, col - 1);
+    tryAdd(row + 1, col + 1);
   }
 
   let wetCellCount = 0;
   let volumeM3 = 0;
   let maxDepth = 0;
+  let minWetDistanceToDam = Number.POSITIVE_INFINITY;
   const depth = new Float32Array(mask.length);
 
   for (let i = 0; i < mask.length; i += 1) {
@@ -677,6 +705,22 @@ async function sampleConnectedMask(
     }
 
     wetCellCount += 1;
+
+    const row = Math.floor(i / resolution);
+    const col = i % resolution;
+    const x = center.x - half + (col + 0.5) * step;
+    const y = center.y - half + (row + 0.5) * step;
+    const damSide = sideOfLine(x, y, dam);
+    const damDx = dam.end.x - dam.start.x;
+    const damDy = dam.end.y - dam.start.y;
+    const damLength = Math.hypot(damDx, damDy);
+    if (damLength > 0) {
+      minWetDistanceToDam = Math.min(
+        minWetDistanceToDam,
+        Math.abs(damSide) / damLength
+      );
+    }
+
     const terrainElevation = elevations[i];
 
     if (terrainElevation !== undefined && Number.isFinite(terrainElevation)) {
@@ -685,6 +729,22 @@ async function sampleConnectedMask(
       maxDepth = Math.max(maxDepth, cellDepth);
       volumeM3 += cellDepth * cellArea;
     }
+  }
+
+  if (wetCellCount < 4) {
+    throw new Error(
+      "The selected reservoir component is too small or disconnected."
+    );
+  }
+
+  const nearDamTolerance = Math.max(step * 3, 35);
+  if (
+    !Number.isFinite(minWetDistanceToDam) ||
+    minWetDistanceToDam > nearDamTolerance
+  ) {
+    throw new Error(
+      "The selected water body is not connected to the dam. Choose a seed in the valley immediately upstream."
+    );
   }
 
   return {
@@ -745,11 +805,11 @@ export async function sampleWaterBasin(
     );
   }
 
-  const center = createSamplingCenter(seed, dam);
   let size = Math.min(
     initialDomainSize(seed, dam),
     settings.maxBasinExtent
   );
+  const center = createSamplingCenter(seed, dam, size);
   let resolution = resolutionForSize(size, settings);
   let sampled: BasinSample;
 
