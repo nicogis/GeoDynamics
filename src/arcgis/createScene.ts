@@ -97,6 +97,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
   const status = document.querySelector<HTMLDivElement>("#status");
   const help = document.querySelector<HTMLDivElement>("#help");
+  const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -153,7 +154,25 @@ export async function createScene(container: string): Promise<SceneView> {
       basin.size,
       basin.waterElevation,
       basin.mask,
+      basin.depth,
       basin.resolution
+    );
+
+    waterNode.setDamMonitor(
+      damBarrier.start,
+      damBarrier.end,
+      basin.damCrestElevation,
+      (state) => {
+        if (!overtopping) {
+          return;
+        }
+
+        const margin = state.freeboard - state.maxWaveHeight;
+        overtopping.textContent = state.overtopping
+          ? `OVERTOPPING — wave +${state.maxWaveHeight.toFixed(2)} m exceeds freeboard ${state.freeboard.toFixed(2)} m by ${Math.abs(margin).toFixed(2)} m.`
+          : `Dam wave monitor — max wave +${state.maxWaveHeight.toFixed(2)} m · freeboard ${state.freeboard.toFixed(2)} m · margin ${Math.max(margin, 0).toFixed(2)} m.`;
+        overtopping.dataset.state = state.overtopping ? "alert" : "normal";
+      }
     );
 
     const crestElevation = basin.damCrestElevation;
@@ -226,7 +245,7 @@ export async function createScene(container: string): Promise<SceneView> {
     const volumeHm3 = basin.volumeM3 / 1_000_000;
 
     writeStatus(
-      `Reservoir generated${source === "automatic" ? " automatically" : ""} — level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · dam ${basin.damLength.toFixed(0)} m · grid ${basin.resolution}×${basin.resolution} · ${basin.cellSize.toFixed(1)} m/cell · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³. Click normally to release the rock.`
+      `Reservoir generated${source === "automatic" ? " automatically" : ""} — level ${basin.waterElevation.toFixed(1)} m · crest ${basin.damCrestElevation.toFixed(1)} m · max depth ${basin.maxDepth.toFixed(1)} m · max dam height ${basin.maxDamHeight.toFixed(1)} m · dam ${basin.damLength.toFixed(0)} m · grid ${basin.resolution}×${basin.resolution} · ${basin.cellSize.toFixed(1)} m/cell · area ${areaHa.toFixed(1)} ha · volume ${volumeHm3.toFixed(3)} hm³. Click normally to release the rock.`
     );
 
     writeHelp(
@@ -470,6 +489,10 @@ export async function createScene(container: string): Promise<SceneView> {
           damGroundPreviewLayer.removeAll();
           damFaceLayer.removeAll();
           damWaterLevelGraphic = null;
+          if (overtopping) {
+            overtopping.textContent = "Dam wave monitor — waiting for reservoir.";
+            overtopping.dataset.state = "normal";
+          }
           damPreviewGraphic = null;
           damGroundPreviewGraphic = null;
 

@@ -18,7 +18,9 @@ type WaterNodeInternal = RenderNode & {
   stateTextures: [WebGLTexture | null, WebGLTexture | null];
   stateFramebuffers: [WebGLFramebuffer | null, WebGLFramebuffer | null];
   maskTexture: WebGLTexture | null;
+  depthTexture: WebGLTexture | null;
   basinMask: Uint8Array | null;
+  basinDepth: Float32Array | null;
   basinResolution: number;
   activeState: number;
   vertexCount: number;
@@ -28,6 +30,12 @@ type WaterNodeInternal = RenderNode & {
   center: Point | null;
   surfaceElevation: number | null;
   pendingImpact: { u: number; v: number; strength: number } | null;
+  damSamples: { u: number; v: number }[];
+  damFreeboard: number;
+  overtoppingCallback:
+    | ((state: { overtopping: boolean; maxWaveHeight: number; freeboard: number }) => void)
+    | null;
+  lastOvertoppingRead: number;
   sceneViewport: Int32Array | null;
   viewMatrix: Matrix4;
   modelMatrix: Matrix4;
@@ -37,7 +45,16 @@ type WaterNodeInternal = RenderNode & {
     size: number,
     elevation: number,
     mask: Uint8Array,
+    depth: Float32Array,
     resolution: number
+  ): void;
+  setDamMonitor(
+    start: Point,
+    end: Point,
+    crestElevation: number,
+    callback: (
+      state: { overtopping: boolean; maxWaveHeight: number; freeboard: number }
+    ) => void
   ): void;
   containsPoint(point: Point): boolean;
   addImpact(point: Point, speed: number): void;
@@ -45,7 +62,9 @@ type WaterNodeInternal = RenderNode & {
   ensureResources(): void;
   rebuildMesh(): void;
   uploadBasinMask(): void;
+  uploadBasinDepth(): void;
   resetWaterState(): void;
+  updateOvertoppingMonitor(): void;
   runImpactPass(): void;
   runSimulationStep(): void;
   drawWater(): void;
@@ -132,6 +151,21 @@ function createMaskTexture(gl: WebGL2RenderingContext): WebGLTexture {
   const texture = gl.createTexture();
   if (!texture) {
     throw new Error("Unable to create water mask texture.");
+  }
+
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  return texture;
+}
+
+function createDepthTexture(gl: WebGL2RenderingContext): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error("Unable to create reservoir depth texture.");
   }
 
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -388,7 +422,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   stateTextures: [null, null],
   stateFramebuffers: [null, null],
   maskTexture: null,
+  depthTexture: null,
   basinMask: null,
+  basinDepth: null,
   basinResolution: WATER_TEXTURE_SIZE,
   activeState: 0,
   vertexCount: 0,
@@ -398,6 +434,10 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   center: null,
   surfaceElevation: null,
   pendingImpact: null,
+  damSamples: [],
+  damFreeboard: 0,
+  overtoppingCallback: null,
+  lastOvertoppingRead: 0,
   sceneViewport: null,
 
   viewMatrix: new Matrix4(),
@@ -415,13 +455,18 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     size: number,
     elevation: number,
     mask: Uint8Array,
+    depth: Float32Array,
     resolution: number
   ) {
     this.size = size;
     this.center = center.clone();
     this.surfaceElevation = elevation;
     this.basinMask = mask.slice();
+    this.basinDepth = depth.slice();
     this.basinResolution = resolution;
+    this.damSamples = [];
+    this.overtoppingCallback = null;
+    this.lastOvertoppingRead = 0;
 
     const surfacePoint = center.clone();
     surfacePoint.z = elevation;
@@ -441,10 +486,48 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
         this.rebuildMesh();
       }
       this.uploadBasinMask();
+      this.uploadBasinDepth();
       this.resetWaterState();
     }
 
     this.requestRender();
+  },
+
+  setDamMonitor(
+    this: WaterNodeInternal,
+    start: Point,
+    end: Point,
+    crestElevation: number,
+    callback: (
+      state: { overtopping: boolean; maxWaveHeight: number; freeboard: number }
+    ) => void
+  ) {
+    if (!this.center || this.surfaceElevation === null) {
+      return;
+    }
+
+    const half = this.size / 2;
+    const sampleCount = 65;
+    this.damSamples = [];
+
+    for (let i = 0; i < sampleCount; i += 1) {
+      const t = i / (sampleCount - 1);
+      const x = start.x + (end.x - start.x) * t;
+      const y = start.y + (end.y - start.y) * t;
+      const u = (x - this.center.x + half) / this.size;
+      const v = (y - this.center.y + half) / this.size;
+
+      if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
+        this.damSamples.push({ u, v });
+      }
+    }
+
+    this.damFreeboard = Math.max(
+      crestElevation - this.surfaceElevation,
+      0
+    );
+    this.overtoppingCallback = callback;
+    this.lastOvertoppingRead = 0;
   },
 
   containsPoint(this: WaterNodeInternal, point: Point) {
@@ -559,9 +642,11 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       createStateFramebuffer(gl, textureB)
     ];
     this.maskTexture = createMaskTexture(gl);
+    this.depthTexture = createDepthTexture(gl);
 
     this.initializedResources = true;
     this.uploadBasinMask();
+    this.uploadBasinDepth();
     this.resetWaterState();
   },
 
@@ -599,6 +684,31 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       0,
       gl.RED,
       gl.UNSIGNED_BYTE,
+      data
+    );
+  },
+
+  uploadBasinDepth(this: WaterNodeInternal) {
+    if (!this.depthTexture) {
+      return;
+    }
+
+    const gl = this.gl;
+    const resolution = this.basinResolution;
+    const data =
+      this.basinDepth ??
+      new Float32Array(resolution * resolution);
+
+    gl.bindTexture(gl.TEXTURE_2D, this.depthTexture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R32F,
+      resolution,
+      resolution,
+      0,
+      gl.RED,
+      gl.FLOAT,
       data
     );
   },
@@ -725,6 +835,64 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.activeState = target;
   },
 
+  updateOvertoppingMonitor(this: WaterNodeInternal) {
+    if (
+      !this.overtoppingCallback ||
+      this.damSamples.length === 0 ||
+      !this.stateFramebuffers[this.activeState]
+    ) {
+      return;
+    }
+
+    const now = performance.now();
+    if (now - this.lastOvertoppingRead < 250) {
+      return;
+    }
+    this.lastOvertoppingRead = now;
+
+    const gl = this.gl;
+    const pixels = new Float32Array(
+      WATER_TEXTURE_SIZE * WATER_TEXTURE_SIZE * 4
+    );
+
+    gl.bindFramebuffer(
+      gl.FRAMEBUFFER,
+      this.stateFramebuffers[this.activeState]
+    );
+    gl.readPixels(
+      0,
+      0,
+      WATER_TEXTURE_SIZE,
+      WATER_TEXTURE_SIZE,
+      gl.RGBA,
+      gl.FLOAT,
+      pixels
+    );
+
+    let maxWaveHeight = 0;
+
+    for (const sample of this.damSamples) {
+      const col = Math.min(
+        Math.max(Math.floor(sample.u * WATER_TEXTURE_SIZE), 0),
+        WATER_TEXTURE_SIZE - 1
+      );
+      const row = Math.min(
+        Math.max(Math.floor(sample.v * WATER_TEXTURE_SIZE), 0),
+        WATER_TEXTURE_SIZE - 1
+      );
+      const index = (row * WATER_TEXTURE_SIZE + col) * 4;
+      maxWaveHeight = Math.max(maxWaveHeight, pixels[index] ?? 0);
+    }
+
+    this.overtoppingCallback({
+      overtopping: maxWaveHeight > this.damFreeboard,
+      maxWaveHeight,
+      freeboard: this.damFreeboard
+    });
+
+    this.resetWebGLState();
+  },
+
   drawWater(this: WaterNodeInternal) {
     if (
       !this.renderProgram ||
@@ -816,6 +984,7 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       this.runSimulationStep();
     }
 
+    this.updateOvertoppingMonitor();
     this.drawWater();
     this.requestRender();
 

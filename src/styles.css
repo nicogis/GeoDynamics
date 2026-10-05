@@ -31,7 +31,7 @@ body {
   font-size: 30px;
 }
 
-.panel p, #help, #status, .settings {
+.panel p, #help, #overtopping, #status, .settings {
   margin: 0;
   color: rgba(255, 255, 255, 0.72);
   line-height: 1.5;
@@ -106,6 +106,20 @@ body {
 #help {
   margin-top: 14px;
   font-size: 13px;
+}
+
+#overtopping {
+  margin-top: 12px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#overtopping[data-state="alert"] {
+  color: #ff8b8b;
+  background: rgba(180, 30, 30, 0.22);
+  font-weight: 700;
 }
 
 #status {
