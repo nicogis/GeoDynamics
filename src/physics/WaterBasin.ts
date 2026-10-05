@@ -22,6 +22,8 @@ export interface SampledWaterBasin {
   damCrestElevation: number;
   maxDamHeight: number;
   mask: Uint8Array;
+  depth: Float32Array;
+  maxDepth: number;
   wetCellCount: number;
   touchesBoundary: boolean;
   damLength: number;
@@ -34,6 +36,8 @@ export interface SampledWaterBasin {
 
 interface BasinSample {
   mask: Uint8Array;
+  depth: Float32Array;
+  maxDepth: number;
   wetCellCount: number;
   touchesBoundary: boolean;
   areaM2: number;
@@ -664,6 +668,8 @@ async function sampleConnectedMask(
 
   let wetCellCount = 0;
   let volumeM3 = 0;
+  let maxDepth = 0;
+  const depth = new Float32Array(mask.length);
 
   for (let i = 0; i < mask.length; i += 1) {
     if (mask[i] === 0) {
@@ -674,13 +680,17 @@ async function sampleConnectedMask(
     const terrainElevation = elevations[i];
 
     if (terrainElevation !== undefined && Number.isFinite(terrainElevation)) {
-      volumeM3 +=
-        Math.max(waterElevation - terrainElevation, 0) * cellArea;
+      const cellDepth = Math.max(waterElevation - terrainElevation, 0);
+      depth[i] = cellDepth;
+      maxDepth = Math.max(maxDepth, cellDepth);
+      volumeM3 += cellDepth * cellArea;
     }
   }
 
   return {
     mask,
+    depth,
+    maxDepth,
     wetCellCount,
     touchesBoundary: touchesMaskBoundary(mask, resolution),
     areaM2: wetCellCount * cellArea,
@@ -783,6 +793,8 @@ export async function sampleWaterBasin(
     damCrestElevation: profile.crestElevation,
     maxDamHeight: profile.maxDamHeight,
     mask: sampled.mask,
+    depth: sampled.depth,
+    maxDepth: sampled.maxDepth,
     wetCellCount: sampled.wetCellCount,
     touchesBoundary: sampled.touchesBoundary,
     damLength,
