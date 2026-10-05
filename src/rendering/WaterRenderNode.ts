@@ -69,6 +69,7 @@ type WaterNodeInternal = RenderNode & {
   containsPoint(point: Point): boolean;
   addImpact(point: Point, speed: number): void;
   getSurface(): { center: Point; size: number; elevation: number } | null;
+  resetDynamics(): void;
   ensureResources(): void;
   rebuildMesh(): void;
   uploadBasinMask(): void;
@@ -739,6 +740,17 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       size: this.size,
       elevation: this.surfaceElevation
     };
+  },
+
+  resetDynamics(this: WaterNodeInternal) {
+    this.pendingImpact = null;
+    this.lastOvertoppingRead = 0;
+
+    if (this.initializedResources) {
+      this.resetWaterState();
+    }
+
+    this.requestRender();
   },
 
   ensureResources(this: WaterNodeInternal) {
