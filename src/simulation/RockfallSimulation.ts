@@ -4,11 +4,10 @@ import RAPIER from "@dimforge/rapier3d-compat";
 
 import type { RockRenderNode } from "../rendering/RockRenderNode";
 import { sampleTerrainMesh } from "../physics/TerrainHeightfield";
+import type { SimulationSettings } from "../config/SimulationSettings";
 
-const ROCK_RADIUS = 9;
-const ROCK_DENSITY = 2600;
+const BASE_ROCK_RADIUS = 9;
 const WATER_DENSITY = 1000;
-const WATER_DRAG_RATE = 1.15;
 
 const ROCK_HULL_VERTICES = new Float32Array([
   -8.5, -6.5, -5.5,
@@ -24,7 +23,6 @@ const ROCK_HULL_VERTICES = new Float32Array([
    9.5,  0.9,  1.8,
   -9.2, -0.6, -0.8
 ]);
-const RELEASE_HEIGHT = 30;
 const FIXED_TIMESTEP = 1 / 60;
 const TRAJECTORY_MIN_STEP = 5;
 const STATUS_INTERVAL_MS = 250;
@@ -68,6 +66,7 @@ export interface WaterSurface {
 
 export interface WaterInteraction {
   getSurface(): WaterSurface | null;
+  containsPoint(point: Point): boolean;
   addImpact(point: Point, speed: number): void;
 }
 
@@ -79,6 +78,7 @@ export class RockfallSimulation {
   private readonly writeTrajectory: TrajectoryWriter;
   private readonly writeResult: ResultWriter;
   private readonly water: WaterInteraction;
+  private readonly settings: SimulationSettings;
 
   private world: RAPIER.World | null = null;
   private body: RAPIER.RigidBody | null = null;
@@ -104,7 +104,8 @@ export class RockfallSimulation {
     writeStatus: StatusWriter,
     writeTrajectory: TrajectoryWriter,
     writeResult: ResultWriter,
-    water: WaterInteraction
+    water: WaterInteraction,
+    settings: SimulationSettings
   ) {
     this.view = view;
     this.rockNode = rockNode;
@@ -112,6 +113,7 @@ export class RockfallSimulation {
     this.writeTrajectory = writeTrajectory;
     this.writeResult = writeResult;
     this.water = water;
+    this.settings = settings;
   }
 
   async release(point: Point): Promise<void> {
@@ -146,12 +148,18 @@ export class RockfallSimulation {
     const body = world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic().setTranslation(
         0,
-        ROCK_RADIUS + RELEASE_HEIGHT,
+        this.settings.rockRadius + this.settings.releaseHeight,
         0
       )
     );
 
-    const rockCollider = RAPIER.ColliderDesc.convexHull(ROCK_HULL_VERTICES);
+    const rockScale = this.settings.rockRadius / BASE_ROCK_RADIUS;
+    const scaledRockHull = new Float32Array(ROCK_HULL_VERTICES.length);
+    for (let i = 0; i < ROCK_HULL_VERTICES.length; i += 1) {
+      scaledRockHull[i] = ROCK_HULL_VERTICES[i] * rockScale;
+    }
+
+    const rockCollider = RAPIER.ColliderDesc.convexHull(scaledRockHull);
 
     if (!rockCollider) {
       throw new Error("Unable to create the irregular rock convex hull.");
@@ -159,7 +167,7 @@ export class RockfallSimulation {
 
     world.createCollider(
       rockCollider
-        .setDensity(ROCK_DENSITY)
+        .setDensity(this.settings.rockDensity)
         .setFriction(0.8)
         .setRestitution(0.12),
       body
@@ -183,7 +191,7 @@ export class RockfallSimulation {
     const triangles = terrain.indices.length / 3;
 
     this.writeStatus(
-      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles. Irregular convex rock released ${RELEASE_HEIGHT} m above ground.`
+      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles. Irregular convex rock released ${this.settings.releaseHeight} m above ground.`
     );
 
     this.animate(runId);
@@ -298,13 +306,9 @@ export class RockfallSimulation {
       return;
     }
 
-    const half = surface.size / 2;
-    const dx = point.x - surface.center.x;
-    const dy = point.y - surface.center.y;
-    const insideFootprint = Math.abs(dx) <= half && Math.abs(dy) <= half;
-    const rockBottom = (point.z ?? 0) - ROCK_RADIUS;
+    const rockBottom = (point.z ?? 0) - this.settings.rockRadius;
     const submergedDepth = surface.elevation - rockBottom;
-    const inWater = insideFootprint && submergedDepth > 0;
+    const inWater = this.water.containsPoint(point) && submergedDepth > 0;
 
     if (inWater && !this.wasInWater) {
       this.water.addImpact(point, speed);
@@ -315,7 +319,7 @@ export class RockfallSimulation {
 
     if (inWater) {
       const immersion = Math.min(
-        Math.max(submergedDepth / (ROCK_RADIUS * 2), 0),
+        Math.max(submergedDepth / (this.settings.rockRadius * 2), 0),
         1
       );
 
@@ -323,7 +327,7 @@ export class RockfallSimulation {
 
       // Stable drag model: convert the chosen damping rate into a force
       // through F = m * a, so the response does not depend on collider volume.
-      const dragAcceleration = WATER_DRAG_RATE * immersion;
+      const dragAcceleration = this.settings.waterDragRate * immersion;
 
       this.body.addForce(
         {
@@ -340,7 +344,7 @@ export class RockfallSimulation {
       const buoyancyForce =
         mass *
         9.81 *
-        (WATER_DENSITY / ROCK_DENSITY) *
+        (WATER_DENSITY / this.settings.rockDensity) *
         immersion;
 
       this.body.addForce({ x: 0, y: buoyancyForce, z: 0 }, true);
@@ -385,8 +389,8 @@ export class RockfallSimulation {
       return;
     }
 
-    const rockVolume = (4 / 3) * Math.PI * ROCK_RADIUS ** 3;
-    const rockMassKg = rockVolume * ROCK_DENSITY;
+    const rockVolume = (4 / 3) * Math.PI * this.settings.rockRadius ** 3;
+    const rockMassKg = rockVolume * this.settings.rockDensity;
     const peakKineticEnergyJ = 0.5 * rockMassKg * this.maxSpeed ** 2;
     const elevationDrop = (this.origin.z ?? 0) - (point.z ?? 0);
 
