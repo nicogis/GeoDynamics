@@ -20,7 +20,10 @@ import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
 import { createSimulationSettings } from "../config/SimulationSettings";
-import { traceDownstreamFlow } from "../physics/DownstreamInundation";
+import {
+  buildDownstreamInundationSurface,
+  traceDownstreamFlow
+} from "../physics/DownstreamInundation";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -211,38 +214,63 @@ export async function createScene(container: string): Promise<SceneView> {
             basin.center,
             source
           )
-            .then((flow) => {
+            .then(async (flow) => {
+              const overtoppingHead = Math.max(
+                state.maxWaveHeight - state.freeboard,
+                0
+              );
+              const surface = await buildDownstreamInundationSurface(
+                view,
+                flow,
+                overtoppingHead
+              );
+
               downstreamLayer.removeAll();
 
               downstreamLayer.add(
                 new Graphic({
-                  geometry: new Polyline({
+                  geometry: new Polygon({
                     spatialReference: view.spatialReference,
-                    paths: [flow.points]
+                    rings: [surface.ring]
                   }),
-                  symbol: new SimpleLineSymbol({
-                    color: [0, 190, 255, 0.95],
-                    width: 5
+                  symbol: new PolygonSymbol3D({
+                    symbolLayers: [
+                      new FillSymbol3DLayer({
+                        material: {
+                          color: [0, 170, 235, 0.46]
+                        },
+                        outline: {
+                          color: [70, 220, 255, 0.95],
+                          size: 1.5
+                        }
+                      })
+                    ]
                   }),
                   attributes: {
-                    lengthM: flow.lengthM,
-                    elevationDropM: flow.elevationDropM
+                    areaM2: surface.areaM2,
+                    maxWidthM: surface.maxWidthM,
+                    sourceStageM: surface.sourceStageM
                   },
                   popupTemplate: {
-                    title: "Downstream flow path",
+                    title: "Downstream inundation surface",
                     content: [
                       {
                         type: "fields",
                         fieldInfos: [
                           {
-                            fieldName: "lengthM",
-                            label: "Path length (m)",
+                            fieldName: "areaM2",
+                            label: "Inundated area (m²)",
                             format: { digitSeparator: true, places: 0 }
                           },
                           {
-                            fieldName: "elevationDropM",
-                            label: "Elevation drop (m)",
-                            format: { digitSeparator: true, places: 1 }
+                            fieldName: "maxWidthM",
+                            label: "Maximum width (m)",
+                            format: { digitSeparator: true, places: 0 }
+                          },
+                          {
+                            fieldName: "sourceStageM",
+                            label: "Source hydraulic stage (m)",
+                            format: { digitSeparator: true, places: 2 }
                           }
                         ]
                       }
@@ -251,8 +279,25 @@ export async function createScene(container: string): Promise<SceneView> {
                 })
               );
 
+              downstreamLayer.add(
+                new Graphic({
+                  geometry: new Polyline({
+                    spatialReference: view.spatialReference,
+                    paths: [flow.points]
+                  }),
+                  symbol: new SimpleLineSymbol({
+                    color: [0, 225, 255, 0.95],
+                    width: 3
+                  }),
+                  attributes: {
+                    lengthM: flow.lengthM,
+                    elevationDropM: flow.elevationDropM
+                  }
+                })
+              );
+
               writeHelp(
-                `Overtopping source traced downstream on ArcGIS terrain — ${flow.lengthM.toFixed(0)} m path, ${flow.elevationDropM.toFixed(1)} m drop. This is the seed geometry for the downstream inundation solver.`
+                `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
               );
             })
             .catch((error: unknown) => {
