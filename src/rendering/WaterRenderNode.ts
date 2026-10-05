@@ -69,6 +69,7 @@ type WaterNodeInternal = RenderNode & {
   containsPoint(point: Point): boolean;
   addImpact(point: Point, speed: number): void;
   getSurface(): { center: Point; size: number; elevation: number } | null;
+  resetDynamics(): void;
   ensureResources(): void;
   rebuildMesh(): void;
   uploadBasinMask(): void;
@@ -212,19 +213,137 @@ function createStateFramebuffer(
   return framebuffer;
 }
 
-function createWaterMesh(size: number): Float32Array {
+function createWaterMesh(
+  view: SceneView,
+  center: Point,
+  size: number,
+  elevation: number,
+  renderOrigin: ArrayLike<number>
+): Float32Array {
   const half = size / 2;
   const cells = WATER_GRID_RESOLUTION;
-  const data = new Float32Array(cells * cells * 6 * 4);
+  const gridSize = cells + 1;
+  const gridVertexCount = gridSize * gridSize;
+  const baseSource = new Float64Array(gridVertexCount * 3);
+  const upSource = new Float64Array(gridVertexCount * 3);
+  const eastSource = new Float64Array(gridVertexCount * 3);
+  const northSource = new Float64Array(gridVertexCount * 3);
+
+  for (let row = 0; row < gridSize; row += 1) {
+    const v = row / cells;
+    const y = center.y - half + v * size;
+
+    for (let col = 0; col < gridSize; col += 1) {
+      const u = col / cells;
+      const x = center.x - half + u * size;
+      const index = (row * gridSize + col) * 3;
+
+      baseSource[index] = x;
+      baseSource[index + 1] = y;
+      baseSource[index + 2] = elevation;
+
+      upSource[index] = x;
+      upSource[index + 1] = y;
+      upSource[index + 2] = elevation + 1;
+
+      eastSource[index] = x + 1;
+      eastSource[index + 1] = y;
+      eastSource[index + 2] = elevation;
+
+      northSource[index] = x;
+      northSource[index + 1] = y + 1;
+      northSource[index + 2] = elevation;
+    }
+  }
+
+  const baseRender = new Float64Array(gridVertexCount * 3);
+  const upRender = new Float64Array(gridVertexCount * 3);
+  const eastRender = new Float64Array(gridVertexCount * 3);
+  const northRender = new Float64Array(gridVertexCount * 3);
+
+  const spatialReference = center.spatialReference;
+  const transformedBase = webgl.toRenderCoordinates(
+    view,
+    baseSource,
+    0,
+    spatialReference,
+    baseRender,
+    0,
+    gridVertexCount
+  );
+  const transformedUp = webgl.toRenderCoordinates(
+    view,
+    upSource,
+    0,
+    spatialReference,
+    upRender,
+    0,
+    gridVertexCount
+  );
+  const transformedEast = webgl.toRenderCoordinates(
+    view,
+    eastSource,
+    0,
+    spatialReference,
+    eastRender,
+    0,
+    gridVertexCount
+  );
+  const transformedNorth = webgl.toRenderCoordinates(
+    view,
+    northSource,
+    0,
+    spatialReference,
+    northRender,
+    0,
+    gridVertexCount
+  );
+
+  if (
+    !transformedBase ||
+    !transformedUp ||
+    !transformedEast ||
+    !transformedNorth
+  ) {
+    throw new Error("Unable to transform water mesh into ArcGIS render coordinates.");
+  }
+
+  // position.xyz + uv + localUp.xyz + localEast.xyz + localNorth.xyz
+  const floatsPerVertex = 14;
+  const data = new Float32Array(
+    cells * cells * 6 * floatsPerVertex
+  );
   let offset = 0;
+
+  const writeDirection = (
+    from: Float64Array,
+    to: Float64Array,
+    index: number
+  ) => {
+    const x = to[index] - from[index];
+    const y = to[index + 1] - from[index + 1];
+    const z = to[index + 2] - from[index + 2];
+    const length = Math.hypot(x, y, z) || 1;
+
+    data[offset++] = x / length;
+    data[offset++] = y / length;
+    data[offset++] = z / length;
+  };
 
   const writeVertex = (col: number, row: number) => {
     const u = col / cells;
     const v = row / cells;
-    data[offset++] = -half + u * size;
-    data[offset++] = -half + v * size;
+    const index = (row * gridSize + col) * 3;
+
+    data[offset++] = baseRender[index] - renderOrigin[0];
+    data[offset++] = baseRender[index + 1] - renderOrigin[1];
+    data[offset++] = baseRender[index + 2] - renderOrigin[2];
     data[offset++] = u;
     data[offset++] = v;
+
+    writeDirection(baseRender, upRender, index);
+    writeDirection(baseRender, eastRender, index);
+    writeDirection(baseRender, northRender, index);
   };
 
   for (let row = 0; row < cells; row += 1) {
@@ -339,8 +458,11 @@ const impactFragmentSource = `#version 300 es
 const renderVertexSource = `#version 300 es
   precision highp float;
 
-  in vec2 aPosition;
+  in vec3 aPosition;
   in vec2 aUv;
+  in vec3 aUp;
+  in vec3 aEast;
+  in vec3 aNorth;
 
   uniform sampler2D uState;
   uniform sampler2D uMask;
@@ -360,13 +482,18 @@ const renderVertexSource = `#version 300 es
     float down = texture(uState, aUv - vec2(0.0, uTexel.y)).r;
     float up = texture(uState, aUv + vec2(0.0, uTexel.y)).r;
 
-    vec3 p = vec3(aPosition, height);
+    vec3 p = aPosition + aUp * height;
     vHeight = height;
 
-    // Exaggerate the visual slope a little. The simulated height remains
-    // untouched; this only makes wave normals easier to read at GIS scales.
+    // The water grid is stored in ArcGIS render coordinates. Perturb the
+    // geographic up-vector with the local east/north wave gradient so the
+    // shading stays correct even in global SceneView/ECEF coordinates.
     vec2 slope = vec2(left - right, down - up) * 3.2;
-    vNormal = normalize(vec3(slope, 1.35));
+    vNormal = normalize(
+      aUp +
+      aEast * slope.x +
+      aNorth * slope.y
+    );
 
     gl_Position = uProjection * uModelView * vec4(p, 1.0);
   }
@@ -478,23 +605,38 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.overtoppingCallback = null;
     this.lastOvertoppingRead = 0;
 
-    const surfacePoint = center.clone();
-    surfacePoint.z = elevation;
-
-    const transform = webgl.renderCoordinateTransformAt(
+    const renderOrigin = new Float64Array(3);
+    const transformedOrigin = webgl.toRenderCoordinates(
       this.view,
-      [surfacePoint.x, surfacePoint.y, surfacePoint.z ?? 0],
-      surfacePoint.spatialReference,
-      new Float64Array(16)
+      [center.x, center.y, elevation],
+      0,
+      center.spatialReference,
+      renderOrigin,
+      0,
+      1
     );
 
-    this.waterTransform = transform ?? null;
+    if (!transformedOrigin) {
+      this.waterTransform = null;
+      throw new Error(
+        "Unable to transform the reservoir origin into ArcGIS render coordinates."
+      );
+    }
+
+    // Keep vertex coordinates close to zero for WebGL precision. The mesh is
+    // generated from exact GIS positions and stored relative to this origin.
+    this.waterTransform = new Float64Array([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      renderOrigin[0], renderOrigin[1], renderOrigin[2], 1
+    ]);
     this.pendingImpact = null;
 
     if (this.initializedResources) {
-      if (this.meshSize !== this.size) {
-        this.rebuildMesh();
-      }
+      // Center/elevation can change even when size is unchanged, so always
+      // rebuild the GIS-aligned mesh when a basin is replaced/regenerated.
+      this.rebuildMesh();
       this.uploadBasinMask();
       this.uploadBasinDepth();
       this.resetWaterState();
@@ -600,6 +742,17 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     };
   },
 
+  resetDynamics(this: WaterNodeInternal) {
+    this.pendingImpact = null;
+    this.lastOvertoppingRead = 0;
+
+    if (this.initializedResources) {
+      this.resetWaterState();
+    }
+
+    this.requestRender();
+  },
+
   ensureResources(this: WaterNodeInternal) {
     if (this.initializedResources) {
       return;
@@ -666,15 +819,31 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
   },
 
   rebuildMesh(this: WaterNodeInternal) {
-    if (!this.meshBuffer) {
+    if (
+      !this.meshBuffer ||
+      !this.center ||
+      this.surfaceElevation === null ||
+      !this.waterTransform
+    ) {
       return;
     }
 
-    const mesh = createWaterMesh(this.size);
+    const renderOrigin = [
+      this.waterTransform[12],
+      this.waterTransform[13],
+      this.waterTransform[14]
+    ];
+    const mesh = createWaterMesh(
+      this.view,
+      this.center,
+      this.size,
+      this.surfaceElevation,
+      renderOrigin
+    );
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
-    this.vertexCount = mesh.length / 4;
+    this.vertexCount = mesh.length / 14;
     this.meshSize = this.size;
   },
 
@@ -948,12 +1117,22 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       "aPosition"
     );
     const uvLocation = gl.getAttribLocation(this.renderProgram, "aUv");
+    const upLocation = gl.getAttribLocation(this.renderProgram, "aUp");
+    const eastLocation = gl.getAttribLocation(this.renderProgram, "aEast");
+    const northLocation = gl.getAttribLocation(this.renderProgram, "aNorth");
+    const stride = 14 * 4;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
     gl.enableVertexAttribArray(positionLocation);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+    gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, stride, 0);
     gl.enableVertexAttribArray(uvLocation);
-    gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, 16, 8);
+    gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, stride, 3 * 4);
+    gl.enableVertexAttribArray(upLocation);
+    gl.vertexAttribPointer(upLocation, 3, gl.FLOAT, false, stride, 5 * 4);
+    gl.enableVertexAttribArray(eastLocation);
+    gl.vertexAttribPointer(eastLocation, 3, gl.FLOAT, false, stride, 8 * 4);
+    gl.enableVertexAttribArray(northLocation);
+    gl.vertexAttribPointer(northLocation, 3, gl.FLOAT, false, stride, 11 * 4);
 
     this.viewMatrix.fromArray(this.camera.viewMatrix);
     this.modelMatrix.fromArray(this.waterTransform);
@@ -985,6 +1164,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
     gl.disableVertexAttribArray(positionLocation);
     gl.disableVertexAttribArray(uvLocation);
+    gl.disableVertexAttribArray(upLocation);
+    gl.disableVertexAttribArray(eastLocation);
+    gl.disableVertexAttribArray(northLocation);
     gl.disable(gl.BLEND);
   },
 
