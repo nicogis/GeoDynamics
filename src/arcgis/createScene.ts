@@ -20,7 +20,10 @@ import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
 import { createSimulationSettings } from "../config/SimulationSettings";
-import { traceDownstreamFlow } from "../physics/DownstreamInundation";
+import {
+  buildDownstreamInundationSurface,
+  traceDownstreamFlow
+} from "../physics/DownstreamInundation";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -107,6 +110,7 @@ export async function createScene(container: string): Promise<SceneView> {
   const status = document.querySelector<HTMLDivElement>("#status");
   const help = document.querySelector<HTMLDivElement>("#help");
   const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
+  const downstream = document.querySelector<HTMLDivElement>("#downstream");
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -125,7 +129,11 @@ export async function createScene(container: string): Promise<SceneView> {
   let damGroundPreviewGraphic: Graphic | null = null;
   let damWaterLevelGraphic: Graphic | null = null;
   let basinRequestId = 0;
+  let downstreamTraceGeneration = 0;
   let downstreamTraceStarted = false;
+  let lastBasinSeed: Point | null = null;
+  let lastBasinSource: "automatic" | "manual" | null = null;
+  let basinRegenerationTimer: number | null = null;
 
   const writeHelp = (message: string) => {
     if (help) {
@@ -141,7 +149,14 @@ export async function createScene(container: string): Promise<SceneView> {
       return;
     }
 
+    lastBasinSeed = seed.clone();
+    lastBasinSource = source;
+
     const requestId = ++basinRequestId;
+    downstreamTraceGeneration += 1;
+    downstreamTraceStarted = false;
+    downstreamLayer.removeAll();
+    view.closePopup();
     writeStatus(
       source === "automatic"
         ? "Detecting upstream reservoir..."
@@ -170,6 +185,10 @@ export async function createScene(container: string): Promise<SceneView> {
 
     downstreamTraceStarted = false;
     downstreamLayer.removeAll();
+    if (downstream) {
+      downstream.textContent = "Downstream: waiting for overtopping.";
+      downstream.dataset.state = "waiting";
+    }
 
     waterNode.setDamMonitor(
       damBarrier.start,
@@ -193,6 +212,11 @@ export async function createScene(container: string): Promise<SceneView> {
           damBarrier
         ) {
           downstreamTraceStarted = true;
+          const traceGeneration = ++downstreamTraceGeneration;
+          if (downstream) {
+            downstream.textContent = "Downstream: tracing overtopping flow...";
+            downstream.dataset.state = "active";
+          }
 
           const source = new Point({
             x:
@@ -211,9 +235,15 @@ export async function createScene(container: string): Promise<SceneView> {
             basin.center,
             source
           )
-            .then((flow) => {
-              downstreamLayer.removeAll();
+            .then(async (flow) => {
+              if (traceGeneration !== downstreamTraceGeneration) {
+                return;
+              }
 
+              // Render the terrain-aware centerline immediately. Surface
+              // construction is a second-stage operation and must not hide
+              // the valid downstream trace when a cross-section fails.
+              downstreamLayer.removeAll();
               downstreamLayer.add(
                 new Graphic({
                   geometry: new Polyline({
@@ -221,41 +251,133 @@ export async function createScene(container: string): Promise<SceneView> {
                     paths: [flow.points]
                   }),
                   symbol: new SimpleLineSymbol({
-                    color: [0, 190, 255, 0.95],
-                    width: 5
+                    color: [0, 225, 255, 0.95],
+                    width: 4
                   }),
                   attributes: {
                     lengthM: flow.lengthM,
                     elevationDropM: flow.elevationDropM
-                  },
-                  popupTemplate: {
-                    title: "Downstream flow path",
-                    content: [
-                      {
-                        type: "fields",
-                        fieldInfos: [
-                          {
-                            fieldName: "lengthM",
-                            label: "Path length (m)",
-                            format: { digitSeparator: true, places: 0 }
-                          },
-                          {
-                            fieldName: "elevationDropM",
-                            label: "Elevation drop (m)",
-                            format: { digitSeparator: true, places: 1 }
-                          }
-                        ]
-                      }
-                    ]
                   }
                 })
               );
 
-              writeHelp(
-                `Overtopping source traced downstream on ArcGIS terrain — ${flow.lengthM.toFixed(0)} m path, ${flow.elevationDropM.toFixed(1)} m drop. This is the seed geometry for the downstream inundation solver.`
+              if (downstream) {
+                downstream.textContent = `Downstream: path traced — ${flow.lengthM.toFixed(0)} m. Building inundation surface...`;
+                downstream.dataset.state = "active";
+              }
+
+              const overtoppingHead = Math.max(
+                state.maxWaveHeight - state.freeboard,
+                0
               );
+
+              try {
+                const surface = await buildDownstreamInundationSurface(
+                  view,
+                  flow,
+                  overtoppingHead
+                );
+
+                if (traceGeneration !== downstreamTraceGeneration) {
+                  return;
+                }
+
+                if (
+                  surface.ring.length >= 4 &&
+                  surface.areaM2 > 1 &&
+                  surface.maxWidthM > 0
+                ) {
+                  downstreamLayer.add(
+                    new Graphic({
+                      geometry: new Polygon({
+                        spatialReference: view.spatialReference,
+                        rings: [surface.ring]
+                      }),
+                      symbol: new PolygonSymbol3D({
+                        symbolLayers: [
+                          new FillSymbol3DLayer({
+                            material: {
+                              color: [0, 170, 235, 0.46]
+                            },
+                            outline: {
+                              color: [70, 220, 255, 0.95],
+                              size: 1.5
+                            }
+                          })
+                        ]
+                      }),
+                      attributes: {
+                        areaM2: surface.areaM2,
+                        maxWidthM: surface.maxWidthM,
+                        sourceStageM: surface.sourceStageM
+                      },
+                      popupTemplate: {
+                        title: "Downstream inundation surface",
+                        content: [
+                          {
+                            type: "fields",
+                            fieldInfos: [
+                              {
+                                fieldName: "areaM2",
+                                label: "Inundated area (m²)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "maxWidthM",
+                                label: "Maximum width (m)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "sourceStageM",
+                                label: "Source hydraulic stage (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    })
+                  );
+
+                  writeHelp(
+                    `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
+                  );
+                  if (downstream) {
+                    downstream.textContent =
+                      `Downstream: inundation surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha.`;
+                    downstream.dataset.state = "active";
+                  }
+                } else {
+                  writeHelp(
+                    `Downstream path generated (${flow.lengthM.toFixed(0)} m), but the first inundation envelope is too narrow to render reliably.`
+                  );
+                  if (downstream) {
+                    downstream.textContent =
+                      "Downstream: path ready, inundation surface too narrow.";
+                    downstream.dataset.state = "error";
+                  }
+                }
+              } catch (surfaceError: unknown) {
+                console.warn(
+                  "Downstream inundation surface generation failed:",
+                  surfaceError
+                );
+                writeHelp(
+                  surfaceError instanceof Error
+                    ? `Downstream path generated, but inundation surface failed: ${surfaceError.message}`
+                    : "Downstream path generated, but inundation surface failed."
+                );
+                if (downstream) {
+                  downstream.textContent = "Downstream: inundation surface failed.";
+                  downstream.dataset.state = "error";
+                }
+              }
             })
             .catch((error: unknown) => {
+              if (traceGeneration !== downstreamTraceGeneration) {
+                return;
+              }
+
               downstreamTraceStarted = false;
               console.warn("Downstream flow tracing failed:", error);
               writeHelp(
@@ -263,6 +385,10 @@ export async function createScene(container: string): Promise<SceneView> {
                   ? `Overtopping detected, but downstream tracing failed: ${error.message}`
                   : "Overtopping detected, but downstream tracing failed."
               );
+              if (downstream) {
+                downstream.textContent = "Downstream: flow tracing failed.";
+                downstream.dataset.state = "error";
+              }
             });
         }
       }
@@ -346,6 +472,50 @@ export async function createScene(container: string): Promise<SceneView> {
     );
   };
 
+  const reservoirSettingKeys = new Set<keyof typeof settings>([
+    "reservoirFreeboard",
+    "maxBasinExtent",
+    "targetDemCellSize",
+    "maxBasinResolution"
+  ]);
+
+  const scheduleBasinRegeneration = () => {
+    if (!lastBasinSeed || !lastBasinSource || !damBarrier) {
+      return;
+    }
+
+    if (basinRegenerationTimer !== null) {
+      window.clearTimeout(basinRegenerationTimer);
+    }
+
+    basinRegenerationTimer = window.setTimeout(() => {
+      basinRegenerationTimer = null;
+      const seed = lastBasinSeed?.clone();
+      const source = lastBasinSource;
+
+      if (!seed || !source) {
+        return;
+      }
+
+      writeHelp("Reservoir parameters changed. Regenerating current basin...");
+
+      void applyBasin(seed, source)
+        .then(() => {
+          writeHelp(
+            "Reservoir regenerated with updated parameters. Rockfall settings apply to the next release."
+          );
+        })
+        .catch((error: unknown) => {
+          console.warn("Reservoir regeneration failed:", error);
+          writeHelp(
+            error instanceof Error
+              ? `Reservoir regeneration failed: ${error.message}`
+              : "Reservoir regeneration failed."
+          );
+        });
+    }, 250);
+  };
+
   const bindNumberSetting = (
     id: string,
     key: keyof typeof settings,
@@ -374,9 +544,13 @@ export async function createScene(container: string): Promise<SceneView> {
         rockNode.setRadius(value);
       }
 
-      writeHelp(
-        "Parameters updated. Basin settings apply to the next reservoir generation; rockfall settings apply to the next release."
-      );
+      if (reservoirSettingKeys.has(key)) {
+        scheduleBasinRegeneration();
+      } else {
+        writeHelp(
+          "Rockfall parameter updated. It applies to the next release."
+        );
+      }
     };
 
     input.addEventListener("change", update);
@@ -393,9 +567,7 @@ export async function createScene(container: string): Promise<SceneView> {
     input.value = String(settings.maxBasinResolution);
     input.addEventListener("change", () => {
       settings.maxBasinResolution = Number(input.value);
-      writeHelp(
-        "Parameters updated. Basin settings apply to the next reservoir generation."
-      );
+      scheduleBasinRegeneration();
     });
   };
 
@@ -581,8 +753,13 @@ export async function createScene(container: string): Promise<SceneView> {
           damLayer.removeAll();
           damGroundPreviewLayer.removeAll();
           damFaceLayer.removeAll();
+          downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
           downstreamTraceStarted = false;
+          if (downstream) {
+            downstream.textContent = "Downstream: waiting for overtopping.";
+            downstream.dataset.state = "waiting";
+          }
           damWaterLevelGraphic = null;
           if (overtopping) {
             overtopping.textContent = "Dam wave monitor — waiting for reservoir.";
@@ -708,7 +885,24 @@ export async function createScene(container: string): Promise<SceneView> {
 
       trajectoryLayer.removeAll();
       resultLayer.removeAll();
+      downstreamTraceGeneration += 1;
+      downstreamLayer.removeAll();
       trajectoryGraphic = null;
+      downstreamTraceStarted = false;
+
+      waterNode.resetDynamics();
+
+      if (overtopping) {
+        overtopping.textContent = "Dam wave monitor — waiting for new impact.";
+        overtopping.dataset.state = "normal";
+      }
+
+      if (downstream) {
+        downstream.textContent = "Downstream: waiting for overtopping.";
+        downstream.dataset.state = "waiting";
+      }
+
+      view.closePopup();
 
       await simulation.release(point);
     })().catch((error: unknown) => {
