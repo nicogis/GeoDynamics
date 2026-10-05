@@ -130,6 +130,9 @@ export async function createScene(container: string): Promise<SceneView> {
   let damWaterLevelGraphic: Graphic | null = null;
   let basinRequestId = 0;
   let downstreamTraceStarted = false;
+  let lastBasinSeed: Point | null = null;
+  let lastBasinSource: "automatic" | "manual" | null = null;
+  let basinRegenerationTimer: number | null = null;
 
   const writeHelp = (message: string) => {
     if (help) {
@@ -144,6 +147,9 @@ export async function createScene(container: string): Promise<SceneView> {
     if (!damBarrier) {
       return;
     }
+
+    lastBasinSeed = seed.clone();
+    lastBasinSource = source;
 
     const requestId = ++basinRequestId;
     writeStatus(
@@ -448,6 +454,50 @@ export async function createScene(container: string): Promise<SceneView> {
     );
   };
 
+  const reservoirSettingKeys = new Set<keyof typeof settings>([
+    "reservoirFreeboard",
+    "maxBasinExtent",
+    "targetDemCellSize",
+    "maxBasinResolution"
+  ]);
+
+  const scheduleBasinRegeneration = () => {
+    if (!lastBasinSeed || !lastBasinSource || !damBarrier) {
+      return;
+    }
+
+    if (basinRegenerationTimer !== null) {
+      window.clearTimeout(basinRegenerationTimer);
+    }
+
+    basinRegenerationTimer = window.setTimeout(() => {
+      basinRegenerationTimer = null;
+      const seed = lastBasinSeed?.clone();
+      const source = lastBasinSource;
+
+      if (!seed || !source) {
+        return;
+      }
+
+      writeHelp("Reservoir parameters changed. Regenerating current basin...");
+
+      void applyBasin(seed, source)
+        .then(() => {
+          writeHelp(
+            "Reservoir regenerated with updated parameters. Rockfall settings apply to the next release."
+          );
+        })
+        .catch((error: unknown) => {
+          console.warn("Reservoir regeneration failed:", error);
+          writeHelp(
+            error instanceof Error
+              ? `Reservoir regeneration failed: ${error.message}`
+              : "Reservoir regeneration failed."
+          );
+        });
+    }, 250);
+  };
+
   const bindNumberSetting = (
     id: string,
     key: keyof typeof settings,
@@ -476,9 +526,13 @@ export async function createScene(container: string): Promise<SceneView> {
         rockNode.setRadius(value);
       }
 
-      writeHelp(
-        "Parameters updated. Basin settings apply to the next reservoir generation; rockfall settings apply to the next release."
-      );
+      if (reservoirSettingKeys.has(key)) {
+        scheduleBasinRegeneration();
+      } else {
+        writeHelp(
+          "Rockfall parameter updated. It applies to the next release."
+        );
+      }
     };
 
     input.addEventListener("change", update);
@@ -495,9 +549,7 @@ export async function createScene(container: string): Promise<SceneView> {
     input.value = String(settings.maxBasinResolution);
     input.addEventListener("change", () => {
       settings.maxBasinResolution = Number(input.value);
-      writeHelp(
-        "Parameters updated. Basin settings apply to the next reservoir generation."
-      );
+      scheduleBasinRegeneration();
     });
   };
 
