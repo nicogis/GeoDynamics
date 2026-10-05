@@ -20,6 +20,7 @@ import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
 import { createSimulationSettings } from "../config/SimulationSettings";
+import { traceDownstreamFlow } from "../physics/DownstreamInundation";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -57,6 +58,13 @@ export async function createScene(container: string): Promise<SceneView> {
     }
   });
 
+  const downstreamLayer = new GraphicsLayer({
+    title: "Downstream inundation path",
+    elevationInfo: {
+      mode: "absolute-height"
+    }
+  });
+
   const map = new Map({
     basemap: "satellite",
     ground: "world-elevation",
@@ -65,7 +73,8 @@ export async function createScene(container: string): Promise<SceneView> {
       resultLayer,
       damGroundPreviewLayer,
       damFaceLayer,
-      damLayer
+      damLayer,
+      downstreamLayer
     ]
   });
 
@@ -116,6 +125,7 @@ export async function createScene(container: string): Promise<SceneView> {
   let damGroundPreviewGraphic: Graphic | null = null;
   let damWaterLevelGraphic: Graphic | null = null;
   let basinRequestId = 0;
+  let downstreamTraceStarted = false;
 
   const writeHelp = (message: string) => {
     if (help) {
@@ -158,6 +168,9 @@ export async function createScene(container: string): Promise<SceneView> {
       basin.resolution
     );
 
+    downstreamTraceStarted = false;
+    downstreamLayer.removeAll();
+
     waterNode.setDamMonitor(
       damBarrier.start,
       damBarrier.end,
@@ -172,6 +185,86 @@ export async function createScene(container: string): Promise<SceneView> {
           ? `OVERTOPPING — wave +${state.maxWaveHeight.toFixed(2)} m exceeds freeboard ${state.freeboard.toFixed(2)} m by ${Math.abs(margin).toFixed(2)} m.`
           : `Dam wave monitor — max wave +${state.maxWaveHeight.toFixed(2)} m · freeboard ${state.freeboard.toFixed(2)} m · margin ${Math.max(margin, 0).toFixed(2)} m.`;
         overtopping.dataset.state = state.overtopping ? "alert" : "normal";
+
+        if (
+          state.overtopping &&
+          state.sourceT !== null &&
+          !downstreamTraceStarted &&
+          damBarrier
+        ) {
+          downstreamTraceStarted = true;
+
+          const source = new Point({
+            x:
+              damBarrier.start.x +
+              (damBarrier.end.x - damBarrier.start.x) * state.sourceT,
+            y:
+              damBarrier.start.y +
+              (damBarrier.end.y - damBarrier.start.y) * state.sourceT,
+            z: basin.damCrestElevation,
+            spatialReference: damBarrier.start.spatialReference
+          });
+
+          void traceDownstreamFlow(
+            view,
+            damBarrier,
+            basin.center,
+            source
+          )
+            .then((flow) => {
+              downstreamLayer.removeAll();
+
+              downstreamLayer.add(
+                new Graphic({
+                  geometry: new Polyline({
+                    spatialReference: view.spatialReference,
+                    paths: [flow.points]
+                  }),
+                  symbol: new SimpleLineSymbol({
+                    color: [0, 190, 255, 0.95],
+                    width: 5
+                  }),
+                  attributes: {
+                    lengthM: flow.lengthM,
+                    elevationDropM: flow.elevationDropM
+                  },
+                  popupTemplate: {
+                    title: "Downstream flow path",
+                    content: [
+                      {
+                        type: "fields",
+                        fieldInfos: [
+                          {
+                            fieldName: "lengthM",
+                            label: "Path length (m)",
+                            format: { digitSeparator: true, places: 0 }
+                          },
+                          {
+                            fieldName: "elevationDropM",
+                            label: "Elevation drop (m)",
+                            format: { digitSeparator: true, places: 1 }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                })
+              );
+
+              writeHelp(
+                `Overtopping source traced downstream on ArcGIS terrain — ${flow.lengthM.toFixed(0)} m path, ${flow.elevationDropM.toFixed(1)} m drop. This is the seed geometry for the downstream inundation solver.`
+              );
+            })
+            .catch((error: unknown) => {
+              downstreamTraceStarted = false;
+              console.warn("Downstream flow tracing failed:", error);
+              writeHelp(
+                error instanceof Error
+                  ? `Overtopping detected, but downstream tracing failed: ${error.message}`
+                  : "Overtopping detected, but downstream tracing failed."
+              );
+            });
+        }
       }
     );
 
@@ -488,6 +581,8 @@ export async function createScene(container: string): Promise<SceneView> {
           damLayer.removeAll();
           damGroundPreviewLayer.removeAll();
           damFaceLayer.removeAll();
+          downstreamLayer.removeAll();
+          downstreamTraceStarted = false;
           damWaterLevelGraphic = null;
           if (overtopping) {
             overtopping.textContent = "Dam wave monitor — waiting for reservoir.";
