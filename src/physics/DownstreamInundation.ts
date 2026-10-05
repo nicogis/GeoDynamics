@@ -203,6 +203,56 @@ function polygonArea2D(ring: number[][]): number {
   return Math.abs(area) * 0.5;
 }
 
+function smoothFlowPoints(points: number[][]): number[][] {
+  if (points.length < 3) {
+    return points.map((point) => [...point]);
+  }
+
+  return points.map((point, index) => {
+    if (index === 0 || index === points.length - 1) {
+      return [...point];
+    }
+
+    const from = Math.max(0, index - 2);
+    const to = Math.min(points.length - 1, index + 2);
+    let weightSum = 0;
+    let x = 0;
+    let y = 0;
+    let z = 0;
+
+    for (let i = from; i <= to; i += 1) {
+      const distance = Math.abs(i - index);
+      const weight = distance === 0 ? 3 : distance === 1 ? 2 : 1;
+      x += points[i][0] * weight;
+      y += points[i][1] * weight;
+      z += points[i][2] * weight;
+      weightSum += weight;
+    }
+
+    return [x / weightSum, y / weightSum, z / weightSum];
+  });
+}
+
+function smoothDistances(values: number[], passes = 2): number[] {
+  let result = [...values];
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    result = result.map((value, index) => {
+      if (index === 0 || index === result.length - 1) {
+        return value;
+      }
+
+      return (
+        result[index - 1] * 0.25 +
+        value * 0.5 +
+        result[index + 1] * 0.25
+      );
+    });
+  }
+
+  return result;
+}
+
 export async function buildDownstreamInundationSurface(
   view: SceneView,
   flow: DownstreamFlowPath,
@@ -217,36 +267,59 @@ export async function buildDownstreamInundationSurface(
     MAX_STAGE_M
   );
 
-  const leftBank: number[][] = [];
-  const rightBank: number[][] = [];
-  let maxWidthM = 0;
+  const centerline = smoothFlowPoints(flow.points);
+  const normals: Array<{ x: number; y: number }> = [];
+  const waterElevations: number[] = [];
+  const rawLeftDistances: number[] = [];
+  const rawRightDistances: number[] = [];
 
-  for (let i = 0; i < flow.points.length; i += 1) {
-    const current = flow.points[i];
-    const previous = flow.points[Math.max(i - 1, 0)];
-    const next = flow.points[Math.min(i + 1, flow.points.length - 1)];
+  let previousNormal: { x: number; y: number } | null = null;
+  let previousLeft = 0;
+  let previousRight = 0;
+  const MAX_WIDTH_CHANGE_M = 30;
+
+  for (let i = 0; i < centerline.length; i += 1) {
+    const current = centerline[i];
+    const tangentWindow = 2;
+    const previous = centerline[Math.max(i - tangentWindow, 0)];
+    const next = centerline[Math.min(i + tangentWindow, centerline.length - 1)];
 
     const tx = next[0] - previous[0];
     const ty = next[1] - previous[1];
     const tangentLength = Math.hypot(tx, ty);
 
     if (tangentLength < 0.001) {
+      normals.push(previousNormal ?? { x: 0, y: 1 });
+      waterElevations.push(current[2] + MIN_STAGE_M);
+      rawLeftDistances.push(previousLeft);
+      rawRightDistances.push(previousRight);
       continue;
     }
 
-    const nx = -ty / tangentLength;
-    const ny = tx / tangentLength;
-    const progress =
-      flow.points.length <= 1 ? 0 : i / (flow.points.length - 1);
+    let normal = {
+      x: -ty / tangentLength,
+      y: tx / tangentLength
+    };
 
-    // First approximation: the available hydraulic head decays downstream.
-    // The next solver stage will replace this envelope with dynamic shallow
-    // water state, but this keeps the initial surface tied to terrain.
+    // Keep left/right orientation consistent through bends. A flipped normal
+    // is the main source of bow-tie polygons and triangular spikes.
+    if (
+      previousNormal &&
+      normal.x * previousNormal.x + normal.y * previousNormal.y < 0
+    ) {
+      normal = { x: -normal.x, y: -normal.y };
+    }
+    previousNormal = normal;
+    normals.push(normal);
+
+    const progress =
+      centerline.length <= 1 ? 0 : i / (centerline.length - 1);
     const stageM = Math.max(
       MIN_STAGE_M,
       sourceStageM * (1 - progress * 0.72)
     );
     const waterElevation = current[2] + stageM;
+    waterElevations.push(waterElevation);
 
     const offsets: number[] = [];
     const samplePoints: number[][] = [];
@@ -258,8 +331,8 @@ export async function buildDownstreamInundationSurface(
     ) {
       offsets.push(distance);
       samplePoints.push([
-        current[0] + nx * distance,
-        current[1] + ny * distance
+        current[0] + normal.x * distance,
+        current[1] + normal.y * distance
       ]);
     }
 
@@ -289,24 +362,54 @@ export async function buildDownstreamInundationSurface(
       rightIndex = j;
     }
 
-    const leftDistance = offsets[leftIndex];
-    const rightDistance = offsets[rightIndex];
+    let leftDistance = Math.abs(offsets[leftIndex]);
+    let rightDistance = Math.abs(offsets[rightIndex]);
+
+    if (i > 0) {
+      leftDistance = Math.min(
+        Math.max(leftDistance, previousLeft - MAX_WIDTH_CHANGE_M),
+        previousLeft + MAX_WIDTH_CHANGE_M
+      );
+      rightDistance = Math.min(
+        Math.max(rightDistance, previousRight - MAX_WIDTH_CHANGE_M),
+        previousRight + MAX_WIDTH_CHANGE_M
+      );
+    }
+
+    previousLeft = leftDistance;
+    previousRight = rightDistance;
+    rawLeftDistances.push(leftDistance);
+    rawRightDistances.push(rightDistance);
+  }
+
+  const leftDistances = smoothDistances(rawLeftDistances, 3);
+  const rightDistances = smoothDistances(rawRightDistances, 3);
+  const leftBank: number[][] = [];
+  const rightBank: number[][] = [];
+  let maxWidthM = 0;
+
+  for (let i = 0; i < centerline.length; i += 1) {
+    const current = centerline[i];
+    const normal = normals[i];
+    const leftDistance = leftDistances[i];
+    const rightDistance = rightDistances[i];
+    const waterElevation = waterElevations[i];
 
     leftBank.push([
-      current[0] + nx * leftDistance,
-      current[1] + ny * leftDistance,
+      current[0] - normal.x * leftDistance,
+      current[1] - normal.y * leftDistance,
       waterElevation
     ]);
 
     rightBank.push([
-      current[0] + nx * rightDistance,
-      current[1] + ny * rightDistance,
+      current[0] + normal.x * rightDistance,
+      current[1] + normal.y * rightDistance,
       waterElevation
     ]);
 
     maxWidthM = Math.max(
       maxWidthM,
-      Math.abs(rightDistance - leftDistance)
+      leftDistance + rightDistance
     );
   }
 
@@ -316,7 +419,7 @@ export async function buildDownstreamInundationSurface(
 
   const ring = [
     ...leftBank,
-    ...rightBank.reverse(),
+    ...[...rightBank].reverse(),
     leftBank[0]
   ];
 
