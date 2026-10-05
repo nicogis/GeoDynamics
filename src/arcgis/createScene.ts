@@ -866,7 +866,23 @@ export async function createScene(container: string): Promise<SceneView> {
 
       trajectoryLayer.removeAll();
       resultLayer.removeAll();
+      downstreamLayer.removeAll();
       trajectoryGraphic = null;
+      downstreamTraceStarted = false;
+
+      waterNode.resetDynamics();
+
+      if (overtopping) {
+        overtopping.textContent = "Dam wave monitor — waiting for new impact.";
+        overtopping.dataset.state = "normal";
+      }
+
+      if (downstream) {
+        downstream.textContent = "Downstream: waiting for overtopping.";
+        downstream.dataset.state = "waiting";
+      }
+
+      view.closePopup();
 
       await simulation.release(point);
     })().catch((error: unknown) => {
