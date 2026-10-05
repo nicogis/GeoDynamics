@@ -129,6 +129,7 @@ export async function createScene(container: string): Promise<SceneView> {
   let damGroundPreviewGraphic: Graphic | null = null;
   let damWaterLevelGraphic: Graphic | null = null;
   let basinRequestId = 0;
+  let downstreamTraceGeneration = 0;
   let downstreamTraceStarted = false;
   let lastBasinSeed: Point | null = null;
   let lastBasinSource: "automatic" | "manual" | null = null;
@@ -152,6 +153,10 @@ export async function createScene(container: string): Promise<SceneView> {
     lastBasinSource = source;
 
     const requestId = ++basinRequestId;
+    downstreamTraceGeneration += 1;
+    downstreamTraceStarted = false;
+    downstreamLayer.removeAll();
+    view.closePopup();
     writeStatus(
       source === "automatic"
         ? "Detecting upstream reservoir..."
@@ -207,6 +212,7 @@ export async function createScene(container: string): Promise<SceneView> {
           damBarrier
         ) {
           downstreamTraceStarted = true;
+          const traceGeneration = ++downstreamTraceGeneration;
           if (downstream) {
             downstream.textContent = "Downstream: tracing overtopping flow...";
             downstream.dataset.state = "active";
@@ -230,6 +236,10 @@ export async function createScene(container: string): Promise<SceneView> {
             source
           )
             .then(async (flow) => {
+              if (traceGeneration !== downstreamTraceGeneration) {
+                return;
+              }
+
               // Render the terrain-aware centerline immediately. Surface
               // construction is a second-stage operation and must not hide
               // the valid downstream trace when a cross-section fails.
@@ -267,6 +277,10 @@ export async function createScene(container: string): Promise<SceneView> {
                   flow,
                   overtoppingHead
                 );
+
+                if (traceGeneration !== downstreamTraceGeneration) {
+                  return;
+                }
 
                 if (
                   surface.ring.length >= 4 &&
@@ -360,6 +374,10 @@ export async function createScene(container: string): Promise<SceneView> {
               }
             })
             .catch((error: unknown) => {
+              if (traceGeneration !== downstreamTraceGeneration) {
+                return;
+              }
+
               downstreamTraceStarted = false;
               console.warn("Downstream flow tracing failed:", error);
               writeHelp(
@@ -735,6 +753,7 @@ export async function createScene(container: string): Promise<SceneView> {
           damLayer.removeAll();
           damGroundPreviewLayer.removeAll();
           damFaceLayer.removeAll();
+          downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
           downstreamTraceStarted = false;
           if (downstream) {
@@ -866,6 +885,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
       trajectoryLayer.removeAll();
       resultLayer.removeAll();
+      downstreamTraceGeneration += 1;
       downstreamLayer.removeAll();
       trajectoryGraphic = null;
       downstreamTraceStarted = false;
