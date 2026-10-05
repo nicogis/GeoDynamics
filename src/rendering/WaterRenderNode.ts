@@ -30,10 +30,15 @@ type WaterNodeInternal = RenderNode & {
   center: Point | null;
   surfaceElevation: number | null;
   pendingImpact: { u: number; v: number; strength: number } | null;
-  damSamples: { u: number; v: number }[];
+  damSamples: { u: number; v: number; t: number }[];
   damFreeboard: number;
   overtoppingCallback:
-    | ((state: { overtopping: boolean; maxWaveHeight: number; freeboard: number }) => void)
+    | ((state: {
+        overtopping: boolean;
+        maxWaveHeight: number;
+        freeboard: number;
+        sourceT: number | null;
+      }) => void)
     | null;
   lastOvertoppingRead: number;
   sceneViewport: Int32Array | null;
@@ -53,7 +58,12 @@ type WaterNodeInternal = RenderNode & {
     end: Point,
     crestElevation: number,
     callback: (
-      state: { overtopping: boolean; maxWaveHeight: number; freeboard: number }
+      state: {
+        overtopping: boolean;
+        maxWaveHeight: number;
+        freeboard: number;
+        sourceT: number | null;
+      }
     ) => void
   ): void;
   containsPoint(point: Point): boolean;
@@ -499,7 +509,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     end: Point,
     crestElevation: number,
     callback: (
-      state: { overtopping: boolean; maxWaveHeight: number; freeboard: number }
+      state: {
+        overtopping: boolean;
+        maxWaveHeight: number;
+        freeboard: number;
+        sourceT: number | null;
+      }
     ) => void
   ) {
     if (!this.center || this.surfaceElevation === null) {
@@ -518,7 +533,7 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       const v = (y - this.center.y + half) / this.size;
 
       if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
-        this.damSamples.push({ u, v });
+        this.damSamples.push({ u, v, t });
       }
     }
 
@@ -870,6 +885,7 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     );
 
     let maxWaveHeight = 0;
+    let sourceT: number | null = null;
 
     for (const sample of this.damSamples) {
       const col = Math.min(
@@ -881,13 +897,19 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
         WATER_TEXTURE_SIZE - 1
       );
       const index = (row * WATER_TEXTURE_SIZE + col) * 4;
-      maxWaveHeight = Math.max(maxWaveHeight, pixels[index] ?? 0);
+      const waveHeight = pixels[index] ?? 0;
+
+      if (waveHeight > maxWaveHeight) {
+        maxWaveHeight = waveHeight;
+        sourceT = sample.t;
+      }
     }
 
     this.overtoppingCallback({
       overtopping: maxWaveHeight > this.damFreeboard,
       maxWaveHeight,
-      freeboard: this.damFreeboard
+      freeboard: this.damFreeboard,
+      sourceT
     });
 
     this.resetWebGLState();
