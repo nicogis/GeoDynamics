@@ -24,6 +24,7 @@ import {
   buildDownstreamInundationSurface,
   traceDownstreamFlow
 } from "../physics/DownstreamInundation";
+import { simulateDownstreamShallowWater } from "../physics/DownstreamShallowWater";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -282,6 +283,32 @@ export async function createScene(container: string): Promise<SceneView> {
                   return;
                 }
 
+                if (downstream) {
+                  downstream.textContent =
+                    "Downstream: running shallow-water raster foundation...";
+                }
+
+                let shallowWater:
+                  | Awaited<ReturnType<typeof simulateDownstreamShallowWater>>
+                  | null = null;
+
+                try {
+                  shallowWater = await simulateDownstreamShallowWater(
+                    view,
+                    flow,
+                    overtoppingHead
+                  );
+                } catch (solverError: unknown) {
+                  console.warn(
+                    "Downstream shallow-water raster simulation failed:",
+                    solverError
+                  );
+                }
+
+                if (traceGeneration !== downstreamTraceGeneration) {
+                  return;
+                }
+
                 if (
                   surface.ring.length >= 4 &&
                   surface.areaM2 > 1 &&
@@ -309,7 +336,12 @@ export async function createScene(container: string): Promise<SceneView> {
                       attributes: {
                         areaM2: surface.areaM2,
                         maxWidthM: surface.maxWidthM,
-                        sourceStageM: surface.sourceStageM
+                        sourceStageM: surface.sourceStageM,
+                        rasterWetAreaM2: shallowWater?.wetAreaM2 ?? null,
+                        peakDepthM: shallowWater?.peakDepthM ?? null,
+                        peakVelocityMs: shallowWater?.peakVelocityMs ?? null,
+                        maxArrivalTimeS: shallowWater?.maxArrivalTimeS ?? null,
+                        rasterCellSizeM: shallowWater?.cellSize ?? null
                       },
                       popupTemplate: {
                         title: "Downstream inundation surface",
@@ -331,6 +363,31 @@ export async function createScene(container: string): Promise<SceneView> {
                                 fieldName: "sourceStageM",
                                 label: "Source hydraulic stage (m)",
                                 format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "rasterWetAreaM2",
+                                label: "Raster wet area (m²)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "peakDepthM",
+                                label: "Raster peak depth (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "peakVelocityMs",
+                                label: "Raster peak velocity (m/s)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "maxArrivalTimeS",
+                                label: "Latest arrival time (s)",
+                                format: { digitSeparator: true, places: 1 }
+                              },
+                              {
+                                fieldName: "rasterCellSizeM",
+                                label: "Raster cell size (m)",
+                                format: { digitSeparator: true, places: 1 }
                               }
                             ]
                           }
@@ -339,13 +396,20 @@ export async function createScene(container: string): Promise<SceneView> {
                     })
                   );
 
-                  writeHelp(
-                    `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
-                  );
+                  if (shallowWater) {
+                    writeHelp(
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · peak depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                    );
+                  } else {
+                    writeHelp(
+                      `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m. Raster solver unavailable for this run.`
+                    );
+                  }
                   if (downstream) {
-                    downstream.textContent =
-                      `Downstream: inundation surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha.`;
-                    downstream.dataset.state = "active";
+                    downstream.textContent = shallowWater
+                      ? `Downstream: raster foundation ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha.`
+                      : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
+                    downstream.dataset.state = shallowWater ? "active" : "error";
                   }
                 } else {
                   writeHelp(
