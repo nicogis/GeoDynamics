@@ -33,7 +33,12 @@ async function sampleCandidates(
     points
   });
 
-  const result = await view.map.ground.queryElevation(samples, {
+  const map = view.map;
+  if (!map) {
+    throw new Error("SceneView does not have an initialized map.");
+  }
+
+  const result = await map.ground.queryElevation(samples, {
     demResolution: "finest-contiguous"
   });
 
