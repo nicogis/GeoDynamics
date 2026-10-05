@@ -215,70 +215,10 @@ export async function createScene(container: string): Promise<SceneView> {
             source
           )
             .then(async (flow) => {
-              const overtoppingHead = Math.max(
-                state.maxWaveHeight - state.freeboard,
-                0
-              );
-              const surface = await buildDownstreamInundationSurface(
-                view,
-                flow,
-                overtoppingHead
-              );
-
+              // Render the terrain-aware centerline immediately. Surface
+              // construction is a second-stage operation and must not hide
+              // the valid downstream trace when a cross-section fails.
               downstreamLayer.removeAll();
-
-              downstreamLayer.add(
-                new Graphic({
-                  geometry: new Polygon({
-                    spatialReference: view.spatialReference,
-                    rings: [surface.ring]
-                  }),
-                  symbol: new PolygonSymbol3D({
-                    symbolLayers: [
-                      new FillSymbol3DLayer({
-                        material: {
-                          color: [0, 170, 235, 0.46]
-                        },
-                        outline: {
-                          color: [70, 220, 255, 0.95],
-                          size: 1.5
-                        }
-                      })
-                    ]
-                  }),
-                  attributes: {
-                    areaM2: surface.areaM2,
-                    maxWidthM: surface.maxWidthM,
-                    sourceStageM: surface.sourceStageM
-                  },
-                  popupTemplate: {
-                    title: "Downstream inundation surface",
-                    content: [
-                      {
-                        type: "fields",
-                        fieldInfos: [
-                          {
-                            fieldName: "areaM2",
-                            label: "Inundated area (m²)",
-                            format: { digitSeparator: true, places: 0 }
-                          },
-                          {
-                            fieldName: "maxWidthM",
-                            label: "Maximum width (m)",
-                            format: { digitSeparator: true, places: 0 }
-                          },
-                          {
-                            fieldName: "sourceStageM",
-                            label: "Source hydraulic stage (m)",
-                            format: { digitSeparator: true, places: 2 }
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                })
-              );
-
               downstreamLayer.add(
                 new Graphic({
                   geometry: new Polyline({
@@ -287,7 +227,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   }),
                   symbol: new SimpleLineSymbol({
                     color: [0, 225, 255, 0.95],
-                    width: 3
+                    width: 4
                   }),
                   attributes: {
                     lengthM: flow.lengthM,
@@ -296,9 +236,94 @@ export async function createScene(container: string): Promise<SceneView> {
                 })
               );
 
-              writeHelp(
-                `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
+              const overtoppingHead = Math.max(
+                state.maxWaveHeight - state.freeboard,
+                0
               );
+
+              try {
+                const surface = await buildDownstreamInundationSurface(
+                  view,
+                  flow,
+                  overtoppingHead
+                );
+
+                if (
+                  surface.ring.length >= 4 &&
+                  surface.areaM2 > 1 &&
+                  surface.maxWidthM > 0
+                ) {
+                  downstreamLayer.add(
+                    new Graphic({
+                      geometry: new Polygon({
+                        spatialReference: view.spatialReference,
+                        rings: [surface.ring]
+                      }),
+                      symbol: new PolygonSymbol3D({
+                        symbolLayers: [
+                          new FillSymbol3DLayer({
+                            material: {
+                              color: [0, 170, 235, 0.46]
+                            },
+                            outline: {
+                              color: [70, 220, 255, 0.95],
+                              size: 1.5
+                            }
+                          })
+                        ]
+                      }),
+                      attributes: {
+                        areaM2: surface.areaM2,
+                        maxWidthM: surface.maxWidthM,
+                        sourceStageM: surface.sourceStageM
+                      },
+                      popupTemplate: {
+                        title: "Downstream inundation surface",
+                        content: [
+                          {
+                            type: "fields",
+                            fieldInfos: [
+                              {
+                                fieldName: "areaM2",
+                                label: "Inundated area (m²)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "maxWidthM",
+                                label: "Maximum width (m)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "sourceStageM",
+                                label: "Source hydraulic stage (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    })
+                  );
+
+                  writeHelp(
+                    `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
+                  );
+                } else {
+                  writeHelp(
+                    `Downstream path generated (${flow.lengthM.toFixed(0)} m), but the first inundation envelope is too narrow to render reliably.`
+                  );
+                }
+              } catch (surfaceError: unknown) {
+                console.warn(
+                  "Downstream inundation surface generation failed:",
+                  surfaceError
+                );
+                writeHelp(
+                  surfaceError instanceof Error
+                    ? `Downstream path generated, but inundation surface failed: ${surfaceError.message}`
+                    : "Downstream path generated, but inundation surface failed."
+                );
+              }
             })
             .catch((error: unknown) => {
               downstreamTraceStarted = false;
