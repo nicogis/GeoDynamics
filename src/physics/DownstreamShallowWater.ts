@@ -6,6 +6,8 @@ import type { DownstreamFlowPath } from "./DownstreamInundation";
 
 export interface DownstreamShallowWaterResult {
   center: Point;
+  minX: number;
+  minY: number;
   width: number;
   height: number;
   resolutionX: number;
@@ -284,6 +286,8 @@ export async function simulateDownstreamShallowWater(
       z: source[2],
       spatialReference: flow.source.spatialReference
     }),
+    minX,
+    minY,
     width,
     height,
     resolutionX,
