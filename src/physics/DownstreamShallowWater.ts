@@ -314,14 +314,14 @@ export async function simulateDownstreamShallowWater(
     depth = nextDepth;
     nextDepth = swap;
 
-    const simulationTime = (step + 1) * dtSeconds;
+    const arrivalSampleTime = (step + 1) * dtSeconds;
     for (let i = 0; i < count; i += 1) {
       const value = depth[i];
       if (value > maxDepth[i]) {
         maxDepth[i] = value;
       }
       if (value > MIN_WET_DEPTH_M && arrivalTime[i] < 0) {
-        arrivalTime[i] = simulationTime;
+        arrivalTime[i] = arrivalSampleTime;
       }
     }
   }
