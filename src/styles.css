@@ -161,3 +161,29 @@ body {
     font-size: 24px;
   }
 }
+
+.raster-legend {
+  display: none;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.raster-legend[data-visible="true"] {
+  display: block;
+}
+
+.raster-legend-bar {
+  height: 8px;
+  margin: 6px 0 4px;
+  border-radius: 999px;
+}
+
+.raster-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.62);
+}
