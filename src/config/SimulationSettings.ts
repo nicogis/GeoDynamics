@@ -10,7 +10,7 @@ export interface SimulationSettings {
 }
 
 export const DEFAULT_SIMULATION_SETTINGS: SimulationSettings = {
-  reservoirFreeboard: 1,
+  reservoirFreeboard: 0.5,
   maxBasinExtent: 4000,
   targetDemCellSize: 5,
   maxBasinResolution: 1024,
