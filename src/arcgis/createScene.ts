@@ -132,6 +132,10 @@ export async function createScene(container: string): Promise<SceneView> {
   let basinRequestId = 0;
   let downstreamTraceGeneration = 0;
   let downstreamTraceStarted = false;
+  let overtoppingPeakHeight = 0;
+  let overtoppingPeakSourceT: number | null = null;
+  let overtoppingPeakLastIncreaseAt = 0;
+  let overtoppingEventActive = false;
   let lastBasinSeed: Point | null = null;
   let lastBasinSource: "automatic" | "manual" | null = null;
   let basinRegenerationTimer: number | null = null;
@@ -156,6 +160,10 @@ export async function createScene(container: string): Promise<SceneView> {
     const requestId = ++basinRequestId;
     downstreamTraceGeneration += 1;
     downstreamTraceStarted = false;
+    overtoppingPeakHeight = 0;
+    overtoppingPeakSourceT = null;
+    overtoppingPeakLastIncreaseAt = 0;
+    overtoppingEventActive = false;
     downstreamLayer.removeAll();
     view.closePopup();
     writeStatus(
@@ -206,9 +214,49 @@ export async function createScene(container: string): Promise<SceneView> {
           : `Dam wave monitor — max wave +${state.maxWaveHeight.toFixed(2)} m · freeboard ${state.freeboard.toFixed(2)} m · margin ${Math.max(margin, 0).toFixed(2)} m.`;
         overtopping.dataset.state = state.overtopping ? "alert" : "normal";
 
+        const now = performance.now();
+
         if (
-          state.overtopping &&
+          !downstreamTraceStarted &&
           state.sourceT !== null &&
+          state.overtopping
+        ) {
+          if (!overtoppingEventActive) {
+            overtoppingEventActive = true;
+            overtoppingPeakHeight = state.maxWaveHeight;
+            overtoppingPeakSourceT = state.sourceT;
+            overtoppingPeakLastIncreaseAt = now;
+          } else if (state.maxWaveHeight > overtoppingPeakHeight + 0.002) {
+            overtoppingPeakHeight = state.maxWaveHeight;
+            overtoppingPeakSourceT = state.sourceT;
+            overtoppingPeakLastIncreaseAt = now;
+          }
+        }
+
+        const peakStable =
+          overtoppingEventActive &&
+          now - overtoppingPeakLastIncreaseAt >= 1000;
+
+        if (
+          overtoppingEventActive &&
+          !downstreamTraceStarted &&
+          damBarrier &&
+          !peakStable &&
+          downstream
+        ) {
+          const measuredHead = Math.max(
+            overtoppingPeakHeight - state.freeboard,
+            0
+          );
+          downstream.textContent =
+            `Downstream: measuring overtopping peak — head ${measuredHead.toFixed(2)} m...`;
+          downstream.dataset.state = "active";
+        }
+
+        if (
+          overtoppingEventActive &&
+          peakStable &&
+          overtoppingPeakSourceT !== null &&
           !downstreamTraceStarted &&
           damBarrier
         ) {
@@ -222,10 +270,10 @@ export async function createScene(container: string): Promise<SceneView> {
           const source = new Point({
             x:
               damBarrier.start.x +
-              (damBarrier.end.x - damBarrier.start.x) * state.sourceT,
+              (damBarrier.end.x - damBarrier.start.x) * overtoppingPeakSourceT,
             y:
               damBarrier.start.y +
-              (damBarrier.end.y - damBarrier.start.y) * state.sourceT,
+              (damBarrier.end.y - damBarrier.start.y) * overtoppingPeakSourceT,
             z: basin.damCrestElevation,
             spatialReference: damBarrier.start.spatialReference
           });
@@ -268,7 +316,7 @@ export async function createScene(container: string): Promise<SceneView> {
               }
 
               const overtoppingHead = Math.max(
-                state.maxWaveHeight - state.freeboard,
+                overtoppingPeakHeight - state.freeboard,
                 0
               );
 
@@ -832,6 +880,10 @@ export async function createScene(container: string): Promise<SceneView> {
           downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
           downstreamTraceStarted = false;
+          overtoppingPeakHeight = 0;
+          overtoppingPeakSourceT = null;
+          overtoppingPeakLastIncreaseAt = 0;
+          overtoppingEventActive = false;
           if (downstream) {
             downstream.textContent = "Downstream: waiting for overtopping.";
             downstream.dataset.state = "waiting";
@@ -965,6 +1017,10 @@ export async function createScene(container: string): Promise<SceneView> {
       downstreamLayer.removeAll();
       trajectoryGraphic = null;
       downstreamTraceStarted = false;
+      overtoppingPeakHeight = 0;
+      overtoppingPeakSourceT = null;
+      overtoppingPeakLastIncreaseAt = 0;
+      overtoppingEventActive = false;
 
       waterNode.resetDynamics();
 
