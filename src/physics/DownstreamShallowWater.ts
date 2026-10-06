@@ -25,6 +25,9 @@ export interface DownstreamShallowWaterResult {
   peakVelocityMs: number;
   maxArrivalTimeS: number;
   simulatedDurationS: number;
+  frontDistanceM: number;
+  stopReason: "converged" | "duration-limit" | "step-limit";
+  frontStillAdvancing: boolean;
 }
 
 const TARGET_CELL_SIZE_M = 20;
@@ -32,8 +35,10 @@ const MAX_RESOLUTION = 128;
 const DOMAIN_MARGIN_M = 220;
 const GRAVITY = 9.81;
 const MIN_SIMULATION_SECONDS = 120;
-const MAX_SIMULATION_SECONDS = 900;
-const MAX_SIMULATION_STEPS = 900;
+const MAX_SIMULATION_SECONDS = 1800;
+const MAX_SIMULATION_STEPS = 2400;
+const CONVERGENCE_STEPS = 40;
+const DEPTH_CHANGE_TOLERANCE_M = 0.001;
 const MIN_WET_DEPTH_M = 0.03;
 const ELEVATION_BATCH_SIZE = 16384;
 
@@ -157,18 +162,6 @@ export async function simulateDownstreamShallowWater(
     Math.max((cellSize / characteristicWaveSpeed) * 0.32, 0.35),
     1.5
   );
-  const targetSimulationSeconds = Math.min(
-    Math.max(
-      flow.lengthM / Math.max(characteristicWaveSpeed * 0.55, 1.2),
-      MIN_SIMULATION_SECONDS
-    ),
-    MAX_SIMULATION_SECONDS
-  );
-  const steps = Math.min(
-    Math.max(Math.ceil(targetSimulationSeconds / dtSeconds), 1),
-    MAX_SIMULATION_STEPS
-  );
-  const simulatedDurationS = steps * dtSeconds;
   const sourcePulseSeconds = Math.min(
     Math.max(20 + Math.max(overtoppingHeadM, 0) * 70, 20),
     90
@@ -196,8 +189,18 @@ export async function simulateDownstreamShallowWater(
     [1, 1, Math.SQRT2]
   ] as const;
 
-  for (let step = 0; step < steps; step += 1) {
+  let simulatedDurationS = 0;
+  let stopReason: DownstreamShallowWaterResult["stopReason"] = "duration-limit";
+  let stableSteps = 0;
+  let frontStillAdvancing = false;
+
+  for (let step = 0; step < MAX_SIMULATION_STEPS; step += 1) {
     const simulationTime = step * dtSeconds;
+
+    if (simulationTime >= MAX_SIMULATION_SECONDS) {
+      stopReason = "duration-limit";
+      break;
+    }
 
     // Treat the overtopping crest as a short-lived hydraulic head boundary
     // rather than a one-frame water blob. This gives the downstream solver a
@@ -315,14 +318,64 @@ export async function simulateDownstreamShallowWater(
     nextDepth = swap;
 
     const arrivalSampleTime = (step + 1) * dtSeconds;
+    let newWetCells = 0;
+    let wetCellsThisStep = 0;
+    let totalDepthChange = 0;
+
     for (let i = 0; i < count; i += 1) {
       const value = depth[i];
+      const previousValue = nextDepth[i];
+
       if (value > maxDepth[i]) {
         maxDepth[i] = value;
       }
+
+      if (value > MIN_WET_DEPTH_M) {
+        wetCellsThisStep += 1;
+      }
+
       if (value > MIN_WET_DEPTH_M && arrivalTime[i] < 0) {
         arrivalTime[i] = arrivalSampleTime;
+        newWetCells += 1;
       }
+
+      totalDepthChange += Math.abs(value - previousValue);
+    }
+
+    simulatedDurationS = arrivalSampleTime;
+    const meanDepthChange =
+      wetCellsThisStep > 0
+        ? totalDepthChange / wetCellsThisStep
+        : 0;
+
+    frontStillAdvancing = newWetCells > 0;
+
+    const sourceFinished =
+      arrivalSampleTime > sourcePulseSeconds;
+    const minimumDurationReached =
+      arrivalSampleTime >= MIN_SIMULATION_SECONDS;
+    const hydraulicallyStable =
+      newWetCells === 0 &&
+      meanDepthChange <= DEPTH_CHANGE_TOLERANCE_M;
+
+    if (
+      sourceFinished &&
+      minimumDurationReached &&
+      hydraulicallyStable
+    ) {
+      stableSteps += 1;
+    } else {
+      stableSteps = 0;
+    }
+
+    if (stableSteps >= CONVERGENCE_STEPS) {
+      stopReason = "converged";
+      frontStillAdvancing = false;
+      break;
+    }
+
+    if (step === MAX_SIMULATION_STEPS - 1) {
+      stopReason = "step-limit";
     }
   }
 
@@ -330,6 +383,7 @@ export async function simulateDownstreamShallowWater(
   let peakDepthM = 0;
   let peakVelocityMs = 0;
   let maxArrivalTimeS = 0;
+  let frontDistanceM = 0;
   const sourceExclusionRadiusCells = 2;
 
   for (let i = 0; i < count; i += 1) {
@@ -347,6 +401,14 @@ export async function simulateDownstreamShallowWater(
 
     if (maxDepth[i] > MIN_WET_DEPTH_M) {
       wetCellCount += 1;
+
+      const x = minX + col * cellSize;
+      const y = minY + row * cellSize;
+      frontDistanceM = Math.max(
+        frontDistanceM,
+        Math.hypot(x - source[0], y - source[1])
+      );
+
       if (arrivalTime[i] >= 0) {
         maxArrivalTimeS = Math.max(maxArrivalTimeS, arrivalTime[i]);
       }
@@ -378,6 +440,9 @@ export async function simulateDownstreamShallowWater(
     peakDepthM,
     peakVelocityMs,
     maxArrivalTimeS,
-    simulatedDurationS
+    simulatedDurationS,
+    frontDistanceM,
+    stopReason,
+    frontStillAdvancing
   };
 }
