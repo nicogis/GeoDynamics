@@ -17,6 +17,7 @@ export interface DownstreamShallowWaterResult {
   maxVelocity: Float32Array;
   wetCellCount: number;
   wetAreaM2: number;
+  overtoppingHeadM: number;
   sourceDepthM: number;
   peakDepthM: number;
   peakVelocityMs: number;
@@ -294,6 +295,7 @@ export async function simulateDownstreamShallowWater(
     maxVelocity,
     wetCellCount,
     wetAreaM2: wetCellCount * cellSize * cellSize,
+    overtoppingHeadM: Math.max(overtoppingHeadM, 0),
     sourceDepthM: sourceDepth,
     peakDepthM,
     peakVelocityMs,
