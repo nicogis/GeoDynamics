@@ -72,6 +72,27 @@
             <input id="waterDragRate" type="number" min="0" max="10" step="0.05" />
           </label>
         </div>
+
+        <div class="settings-section">
+          <div class="settings-title">Downstream raster</div>
+
+          <label class="setting-row">
+            <span>Metric</span>
+            <select id="downstreamRasterMetric">
+              <option value="depth">Max depth</option>
+              <option value="velocity">Peak velocity</option>
+              <option value="arrival">Arrival time</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+
+          <label class="setting-row">
+            <span>Opacity</span>
+            <input id="downstreamRasterOpacity" type="number" min="0.1" max="1" step="0.1" value="0.65" />
+          </label>
+
+          <div id="downstreamLegend" class="raster-legend" data-visible="false"></div>
+        </div>
       </details>
 
       <div id="help">Ctrl+click twice to draw a dam across the valley. GeoDynamics will try to detect the upstream side and generate the reservoir automatically.</div>
