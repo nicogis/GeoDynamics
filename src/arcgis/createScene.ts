@@ -24,7 +24,15 @@ import {
   buildDownstreamInundationSurface,
   traceDownstreamFlow
 } from "../physics/DownstreamInundation";
-import { simulateDownstreamShallowWater } from "../physics/DownstreamShallowWater";
+import {
+  simulateDownstreamShallowWater,
+  type DownstreamShallowWaterResult
+} from "../physics/DownstreamShallowWater";
+import {
+  getDownstreamRasterLegend,
+  renderDownstreamRaster,
+  type DownstreamRasterMetric
+} from "./DownstreamRasterVisualization";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -69,6 +77,13 @@ export async function createScene(container: string): Promise<SceneView> {
     }
   });
 
+  const downstreamRasterLayer = new GraphicsLayer({
+    title: "Downstream hydraulic raster",
+    elevationInfo: {
+      mode: "on-the-ground"
+    }
+  });
+
   const map = new Map({
     basemap: "satellite",
     ground: "world-elevation",
@@ -78,6 +93,7 @@ export async function createScene(container: string): Promise<SceneView> {
       damGroundPreviewLayer,
       damFaceLayer,
       damLayer,
+      downstreamRasterLayer,
       downstreamLayer
     ]
   });
@@ -112,6 +128,15 @@ export async function createScene(container: string): Promise<SceneView> {
   const help = document.querySelector<HTMLDivElement>("#help");
   const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
   const downstream = document.querySelector<HTMLDivElement>("#downstream");
+  const downstreamRasterMetric = document.querySelector<HTMLSelectElement>(
+    "#downstreamRasterMetric"
+  );
+  const downstreamRasterOpacity = document.querySelector<HTMLInputElement>(
+    "#downstreamRasterOpacity"
+  );
+  const downstreamLegend = document.querySelector<HTMLDivElement>(
+    "#downstreamLegend"
+  );
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -139,12 +164,67 @@ export async function createScene(container: string): Promise<SceneView> {
   let lastBasinSeed: Point | null = null;
   let lastBasinSource: "automatic" | "manual" | null = null;
   let basinRegenerationTimer: number | null = null;
+  let lastDownstreamRaster: DownstreamShallowWaterResult | null = null;
+  let rasterMetric: DownstreamRasterMetric = "depth";
+  let rasterOpacity = 0.65;
 
   const writeHelp = (message: string) => {
     if (help) {
       help.textContent = message;
     }
   };
+
+
+  const refreshDownstreamRaster = () => {
+    renderDownstreamRaster(
+      downstreamRasterLayer,
+      lastDownstreamRaster,
+      rasterMetric,
+      rasterOpacity
+    );
+
+    if (!downstreamLegend) {
+      return;
+    }
+
+    const legend = getDownstreamRasterLegend(
+      lastDownstreamRaster,
+      rasterMetric
+    );
+
+    if (!legend) {
+      downstreamLegend.dataset.visible = "false";
+      downstreamLegend.innerHTML = "";
+      return;
+    }
+
+    downstreamLegend.dataset.visible = "true";
+    downstreamLegend.innerHTML =
+      `<strong>${legend.title}</strong>` +
+      `<div class="raster-legend-bar" style="background:${legend.gradient}"></div>` +
+      `<div class="raster-legend-labels"><span>${legend.minLabel}</span><span>${legend.maxLabel}</span></div>`;
+  };
+
+  if (downstreamRasterMetric) {
+    downstreamRasterMetric.value = rasterMetric;
+    downstreamRasterMetric.addEventListener("change", () => {
+      rasterMetric =
+        downstreamRasterMetric.value as DownstreamRasterMetric;
+      refreshDownstreamRaster();
+    });
+  }
+
+  if (downstreamRasterOpacity) {
+    downstreamRasterOpacity.value = String(rasterOpacity);
+    downstreamRasterOpacity.addEventListener("change", () => {
+      const parsed = Number(downstreamRasterOpacity.value);
+      rasterOpacity = Number.isFinite(parsed)
+        ? Math.min(Math.max(parsed, 0.1), 1)
+        : 0.65;
+      downstreamRasterOpacity.value = String(rasterOpacity);
+      refreshDownstreamRaster();
+    });
+  }
 
   const applyBasin = async (
     seed: Point,
@@ -165,6 +245,9 @@ export async function createScene(container: string): Promise<SceneView> {
     overtoppingPeakLastIncreaseAt = 0;
     overtoppingEventActive = false;
     downstreamLayer.removeAll();
+    downstreamRasterLayer.removeAll();
+    lastDownstreamRaster = null;
+    refreshDownstreamRaster();
     view.closePopup();
     writeStatus(
       source === "automatic"
@@ -346,6 +429,8 @@ export async function createScene(container: string): Promise<SceneView> {
                     flow,
                     overtoppingHead
                   );
+                  lastDownstreamRaster = shallowWater;
+                  refreshDownstreamRaster();
                 } catch (solverError: unknown) {
                   console.warn(
                     "Downstream shallow-water raster simulation failed:",
@@ -879,6 +964,9 @@ export async function createScene(container: string): Promise<SceneView> {
           damFaceLayer.removeAll();
           downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
+          downstreamRasterLayer.removeAll();
+          lastDownstreamRaster = null;
+          refreshDownstreamRaster();
           downstreamTraceStarted = false;
           overtoppingPeakHeight = 0;
           overtoppingPeakSourceT = null;
@@ -1015,6 +1103,9 @@ export async function createScene(container: string): Promise<SceneView> {
       resultLayer.removeAll();
       downstreamTraceGeneration += 1;
       downstreamLayer.removeAll();
+      downstreamRasterLayer.removeAll();
+      lastDownstreamRaster = null;
+      refreshDownstreamRaster();
       trajectoryGraphic = null;
       downstreamTraceStarted = false;
       overtoppingPeakHeight = 0;
