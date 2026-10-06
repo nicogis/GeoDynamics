@@ -17,6 +17,7 @@ export interface DownstreamShallowWaterResult {
   maxVelocity: Float32Array;
   wetCellCount: number;
   wetAreaM2: number;
+  sourceDepthM: number;
   peakDepthM: number;
   peakVelocityMs: number;
   maxArrivalTimeS: number;
@@ -252,10 +253,20 @@ export async function simulateDownstreamShallowWater(
   let peakDepthM = 0;
   let peakVelocityMs = 0;
   let maxArrivalTimeS = 0;
+  const sourceExclusionRadiusCells = 2;
 
   for (let i = 0; i < count; i += 1) {
-    peakDepthM = Math.max(peakDepthM, maxDepth[i]);
-    peakVelocityMs = Math.max(peakVelocityMs, maxVelocity[i]);
+    const row = Math.floor(i / resolutionX);
+    const col = i % resolutionX;
+    const distanceFromSource = Math.hypot(
+      row - sourceRow,
+      col - sourceCol
+    );
+
+    if (distanceFromSource > sourceExclusionRadiusCells) {
+      peakDepthM = Math.max(peakDepthM, maxDepth[i]);
+      peakVelocityMs = Math.max(peakVelocityMs, maxVelocity[i]);
+    }
 
     if (maxDepth[i] > MIN_WET_DEPTH_M) {
       wetCellCount += 1;
@@ -283,6 +294,7 @@ export async function simulateDownstreamShallowWater(
     maxVelocity,
     wetCellCount,
     wetAreaM2: wetCellCount * cellSize * cellSize,
+    sourceDepthM: sourceDepth,
     peakDepthM,
     peakVelocityMs,
     maxArrivalTimeS
