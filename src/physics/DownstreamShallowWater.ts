@@ -24,14 +24,16 @@ export interface DownstreamShallowWaterResult {
   peakDepthM: number;
   peakVelocityMs: number;
   maxArrivalTimeS: number;
+  simulatedDurationS: number;
 }
 
 const TARGET_CELL_SIZE_M = 20;
 const MAX_RESOLUTION = 128;
 const DOMAIN_MARGIN_M = 220;
-const STEPS = 180;
-const DT_SECONDS = 0.45;
 const GRAVITY = 9.81;
+const MIN_SIMULATION_SECONDS = 120;
+const MAX_SIMULATION_SECONDS = 900;
+const MAX_SIMULATION_STEPS = 900;
 const MIN_WET_DEPTH_M = 0.03;
 const ELEVATION_BATCH_SIZE = 16384;
 
@@ -147,6 +149,31 @@ export async function simulateDownstreamShallowWater(
     4
   );
 
+  const characteristicWaveSpeed = Math.max(
+    Math.sqrt(GRAVITY * sourceDepth),
+    1
+  );
+  const dtSeconds = Math.min(
+    Math.max((cellSize / characteristicWaveSpeed) * 0.32, 0.35),
+    1.5
+  );
+  const targetSimulationSeconds = Math.min(
+    Math.max(
+      flow.lengthM / Math.max(characteristicWaveSpeed * 0.55, 1.2),
+      MIN_SIMULATION_SECONDS
+    ),
+    MAX_SIMULATION_SECONDS
+  );
+  const steps = Math.min(
+    Math.max(Math.ceil(targetSimulationSeconds / dtSeconds), 1),
+    MAX_SIMULATION_STEPS
+  );
+  const simulatedDurationS = steps * dtSeconds;
+  const sourcePulseSeconds = Math.min(
+    Math.max(20 + Math.max(overtoppingHeadM, 0) * 70, 20),
+    90
+  );
+
   for (let row = Math.max(0, sourceRow - 1); row <= Math.min(resolutionY - 1, sourceRow + 1); row += 1) {
     for (let col = Math.max(0, sourceCol - 1); col <= Math.min(resolutionX - 1, sourceCol + 1); col += 1) {
       const index = indexOf(row, col, resolutionX);
@@ -159,13 +186,51 @@ export async function simulateDownstreamShallowWater(
   }
 
   const neighbors = [
-    [-1, 0],
-    [1, 0],
-    [0, -1],
-    [0, 1]
+    [-1, 0, 1],
+    [1, 0, 1],
+    [0, -1, 1],
+    [0, 1, 1],
+    [-1, -1, Math.SQRT2],
+    [-1, 1, Math.SQRT2],
+    [1, -1, Math.SQRT2],
+    [1, 1, Math.SQRT2]
   ] as const;
 
-  for (let step = 0; step < STEPS; step += 1) {
+  for (let step = 0; step < steps; step += 1) {
+    const simulationTime = step * dtSeconds;
+
+    // Treat the overtopping crest as a short-lived hydraulic head boundary
+    // rather than a one-frame water blob. This gives the downstream solver a
+    // finite-duration source pulse and lets the flood wave propagate through
+    // long valleys before the forcing decays.
+    if (simulationTime <= sourcePulseSeconds) {
+      const pulse = Math.max(
+        1 - simulationTime / Math.max(sourcePulseSeconds, 1),
+        0.35
+      );
+      const boundaryDepth = sourceDepth * pulse;
+
+      for (
+        let row = Math.max(0, sourceRow - 1);
+        row <= Math.min(resolutionY - 1, sourceRow + 1);
+        row += 1
+      ) {
+        for (
+          let col = Math.max(0, sourceCol - 1);
+          col <= Math.min(resolutionX - 1, sourceCol + 1);
+          col += 1
+        ) {
+          const sourceIndex = indexOf(row, col, resolutionX);
+          if (Number.isFinite(terrain[sourceIndex])) {
+            depth[sourceIndex] = Math.max(
+              depth[sourceIndex],
+              boundaryDepth
+            );
+          }
+        }
+      }
+    }
+
     nextDepth.set(depth);
 
     for (let row = 1; row < resolutionY - 1; row += 1) {
@@ -182,9 +247,9 @@ export async function simulateDownstreamShallowWater(
         }
 
         const localSurface = localTerrain + localDepth;
-        let available = localDepth * 0.32;
+        let available = localDepth * 0.55;
 
-        for (const [dr, dc] of neighbors) {
+        for (const [dr, dc, distanceFactor] of neighbors) {
           if (available <= 0) {
             break;
           }
@@ -210,14 +275,23 @@ export async function simulateDownstreamShallowWater(
 
           const hydraulicDepth = Math.max(localDepth, MIN_WET_DEPTH_M);
           const waveCelerity = Math.sqrt(GRAVITY * hydraulicDepth);
+          const neighborDistance = cellSize * distanceFactor;
+          const slope = Math.min(
+            Math.max(headDifference / neighborDistance, 0),
+            1
+          );
           const velocity = Math.min(
-            waveCelerity * Math.sqrt(Math.min(headDifference / cellSize, 1)),
+            waveCelerity * Math.sqrt(slope),
             12
+          );
+          const courantNumber = Math.min(
+            velocity * dtSeconds / neighborDistance,
+            0.45
           );
           const courantTransfer = Math.min(
             available,
-            velocity * DT_SECONDS / cellSize * localDepth * 0.22,
-            headDifference * 0.16
+            courantNumber * localDepth * 0.42,
+            headDifference * 0.24
           );
 
           if (courantTransfer <= 0) {
@@ -240,7 +314,7 @@ export async function simulateDownstreamShallowWater(
     depth = nextDepth;
     nextDepth = swap;
 
-    const simulationTime = (step + 1) * DT_SECONDS;
+    const simulationTime = (step + 1) * dtSeconds;
     for (let i = 0; i < count; i += 1) {
       const value = depth[i];
       if (value > maxDepth[i]) {
@@ -303,6 +377,7 @@ export async function simulateDownstreamShallowWater(
     sourceDepthM: sourceDepth,
     peakDepthM,
     peakVelocityMs,
-    maxArrivalTimeS
+    maxArrivalTimeS,
+    simulatedDurationS
   };
 }
