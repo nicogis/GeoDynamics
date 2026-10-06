@@ -187,26 +187,26 @@ export async function createScene(container: string): Promise<SceneView> {
           color: rasterActive
             ? [0, 225, 255, 0.55]
             : [0, 225, 255, 0.95],
-          width: rasterActive ? 1.75 : 4
+          width: rasterActive ? 1.25 : 4
         });
+        graphic.visible = true;
       } else if (geometryType === "polygon") {
-        graphic.symbol = new PolygonSymbol3D({
-          symbolLayers: [
-            new FillSymbol3DLayer({
-              material: {
-                color: rasterActive
-                  ? [0, 170, 235, 0.10]
-                  : [0, 170, 235, 0.46]
-              },
-              outline: {
-                color: rasterActive
-                  ? [70, 220, 255, 0.32]
-                  : [70, 220, 255, 0.95],
-                size: rasterActive ? 0.75 : 1.5
-              }
-            })
-          ]
-        });
+        graphic.visible = !rasterActive;
+        if (!rasterActive) {
+          graphic.symbol = new PolygonSymbol3D({
+            symbolLayers: [
+              new FillSymbol3DLayer({
+                material: {
+                  color: [0, 170, 235, 0.46]
+                },
+                outline: {
+                  color: [70, 220, 255, 0.95],
+                  size: 1.5
+                }
+              })
+            ]
+          });
+        }
       }
     }
   };
@@ -582,7 +582,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
