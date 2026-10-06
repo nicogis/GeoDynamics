@@ -338,6 +338,7 @@ export async function createScene(container: string): Promise<SceneView> {
                         maxWidthM: surface.maxWidthM,
                         sourceStageM: surface.sourceStageM,
                         rasterWetAreaM2: shallowWater?.wetAreaM2 ?? null,
+                        sourceDepthM: shallowWater?.sourceDepthM ?? null,
                         peakDepthM: shallowWater?.peakDepthM ?? null,
                         peakVelocityMs: shallowWater?.peakVelocityMs ?? null,
                         maxArrivalTimeS: shallowWater?.maxArrivalTimeS ?? null,
@@ -370,8 +371,13 @@ export async function createScene(container: string): Promise<SceneView> {
                                 format: { digitSeparator: true, places: 0 }
                               },
                               {
+                                fieldName: "sourceDepthM",
+                                label: "Source depth (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
                                 fieldName: "peakDepthM",
-                                label: "Raster peak depth (m)",
+                                label: "Max downstream depth (m)",
                                 format: { digitSeparator: true, places: 2 }
                               },
                               {
@@ -398,7 +404,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · peak depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
