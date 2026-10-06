@@ -93,8 +93,8 @@ export async function createScene(container: string): Promise<SceneView> {
       damGroundPreviewLayer,
       damFaceLayer,
       damLayer,
-      downstreamRasterLayer,
-      downstreamLayer
+      downstreamLayer,
+      downstreamRasterLayer
     ]
   });
 
@@ -175,6 +175,42 @@ export async function createScene(container: string): Promise<SceneView> {
   };
 
 
+  const refreshDownstreamPresentation = () => {
+    const rasterActive =
+      rasterMetric !== "off" && lastDownstreamRaster !== null;
+
+    for (const graphic of downstreamLayer.graphics.toArray()) {
+      const geometryType = graphic.geometry?.type;
+
+      if (geometryType === "polyline") {
+        graphic.symbol = new SimpleLineSymbol({
+          color: rasterActive
+            ? [0, 225, 255, 0.55]
+            : [0, 225, 255, 0.95],
+          width: rasterActive ? 1.75 : 4
+        });
+      } else if (geometryType === "polygon") {
+        graphic.symbol = new PolygonSymbol3D({
+          symbolLayers: [
+            new FillSymbol3DLayer({
+              material: {
+                color: rasterActive
+                  ? [0, 170, 235, 0.10]
+                  : [0, 170, 235, 0.46]
+              },
+              outline: {
+                color: rasterActive
+                  ? [70, 220, 255, 0.32]
+                  : [70, 220, 255, 0.95],
+                size: rasterActive ? 0.75 : 1.5
+              }
+            })
+          ]
+        });
+      }
+    }
+  };
+
   const refreshDownstreamRaster = () => {
     renderDownstreamRaster(
       downstreamRasterLayer,
@@ -182,6 +218,7 @@ export async function createScene(container: string): Promise<SceneView> {
       rasterMetric,
       rasterOpacity
     );
+    refreshDownstreamPresentation();
 
     if (!downstreamLegend) {
       return;
@@ -392,6 +429,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   }
                 })
               );
+              refreshDownstreamPresentation();
 
               if (downstream) {
                 downstream.textContent = `Downstream: path traced — ${flow.lengthM.toFixed(0)} m. Building inundation surface...`;
@@ -540,6 +578,7 @@ export async function createScene(container: string): Promise<SceneView> {
                       }
                     })
                   );
+                  refreshDownstreamPresentation();
 
                   if (shallowWater) {
                     writeHelp(
