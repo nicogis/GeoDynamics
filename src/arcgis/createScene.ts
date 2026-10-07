@@ -462,9 +462,16 @@ export async function createScene(container: string): Promise<SceneView> {
                   | null = null;
 
                 try {
+                  const activeDam = damBarrier;
+                  if (!activeDam) {
+                    throw new Error(
+                      "Dam barrier is no longer available for downstream simulation."
+                    );
+                  }
+
                   const damLengthM = Math.hypot(
-                    damBarrier.end.x - damBarrier.start.x,
-                    damBarrier.end.y - damBarrier.start.y
+                    activeDam.end.x - activeDam.start.x,
+                    activeDam.end.y - activeDam.start.y
                   );
                   shallowWater = await simulateDownstreamShallowWater(
                     view,
