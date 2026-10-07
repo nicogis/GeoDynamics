@@ -38,6 +38,8 @@ type WaterNodeInternal = RenderNode & {
         maxWaveHeight: number;
         freeboard: number;
         sourceT: number | null;
+        overtoppingWidthFraction: number;
+        overtoppingSampleCount: number;
       }) => void)
     | null;
   lastOvertoppingRead: number;
@@ -63,6 +65,8 @@ type WaterNodeInternal = RenderNode & {
         maxWaveHeight: number;
         freeboard: number;
         sourceT: number | null;
+        overtoppingWidthFraction: number;
+        overtoppingSampleCount: number;
       }
     ) => void
   ): void;
@@ -656,6 +660,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
         maxWaveHeight: number;
         freeboard: number;
         sourceT: number | null;
+        overtoppingWidthFraction: number;
+        overtoppingSampleCount: number;
       }
     ) => void
   ) {
@@ -1055,6 +1061,9 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
     let maxWaveHeight = 0;
     let sourceT: number | null = null;
+    let overtoppingMinT = Number.POSITIVE_INFINITY;
+    let overtoppingMaxT = Number.NEGATIVE_INFINITY;
+    let overtoppingSampleCount = 0;
 
     for (const sample of this.damSamples) {
       const col = Math.min(
@@ -1072,13 +1081,40 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
         maxWaveHeight = waveHeight;
         sourceT = sample.t;
       }
+
+      if (waveHeight > this.damFreeboard) {
+        overtoppingSampleCount += 1;
+        overtoppingMinT = Math.min(overtoppingMinT, sample.t);
+        overtoppingMaxT = Math.max(overtoppingMaxT, sample.t);
+      }
     }
+
+    const sampleSpacingFraction =
+      this.damSamples.length > 1
+        ? 1 / (this.damSamples.length - 1)
+        : 1;
+    const overtoppingWidthFraction =
+      overtoppingSampleCount > 0 &&
+      Number.isFinite(overtoppingMinT) &&
+      Number.isFinite(overtoppingMaxT)
+        ? Math.min(
+            Math.max(
+              overtoppingMaxT -
+                overtoppingMinT +
+                sampleSpacingFraction,
+              sampleSpacingFraction
+            ),
+            1
+          )
+        : 0;
 
     this.overtoppingCallback({
       overtopping: maxWaveHeight > this.damFreeboard,
       maxWaveHeight,
       freeboard: this.damFreeboard,
-      sourceT
+      sourceT,
+      overtoppingWidthFraction,
+      overtoppingSampleCount
     });
 
     this.resetWebGLState();
