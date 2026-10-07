@@ -24,6 +24,10 @@ body {
   backdrop-filter: blur(12px);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
   z-index: 10;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .panel h1 {
@@ -155,6 +159,7 @@ body {
     left: 12px;
     width: auto;
     padding: 16px 18px;
+    max-height: calc(100vh - 24px);
   }
 
   .panel h1 {
@@ -186,4 +191,29 @@ body {
   justify-content: space-between;
   gap: 12px;
   color: rgba(255, 255, 255, 0.62);
+}
+
+.panel {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.panel::-webkit-scrollbar {
+  width: 10px;
+}
+
+.panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.34);
+  background-clip: padding-box;
 }
