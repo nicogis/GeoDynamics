@@ -217,3 +217,39 @@ body {
   background: rgba(255, 255, 255, 0.34);
   background-clip: padding-box;
 }
+
+.hazard-summary {
+  display: none;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.45;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.hazard-summary[data-visible="true"] {
+  display: block;
+}
+
+.export-button {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  color: #f6f7f8;
+  background: rgba(80, 220, 255, 0.14);
+  border: 1px solid rgba(80, 220, 255, 0.34);
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.export-button:hover:not(:disabled) {
+  background: rgba(80, 220, 255, 0.22);
+}
+
+.export-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

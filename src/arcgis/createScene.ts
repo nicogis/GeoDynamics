@@ -33,6 +33,10 @@ import {
   renderDownstreamRaster,
   type DownstreamRasterMetric
 } from "./DownstreamRasterVisualization";
+import {
+  downloadHazardGeoJson,
+  summarizeFloodHazard
+} from "./HazardOutputs";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -137,6 +141,12 @@ export async function createScene(container: string): Promise<SceneView> {
   const downstreamLegend = document.querySelector<HTMLDivElement>(
     "#downstreamLegend"
   );
+  const hazardSummary = document.querySelector<HTMLDivElement>(
+    "#hazardSummary"
+  );
+  const exportHazardGeoJson = document.querySelector<HTMLButtonElement>(
+    "#exportHazardGeoJson"
+  );
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -223,6 +233,26 @@ export async function createScene(container: string): Promise<SceneView> {
     );
     refreshDownstreamPresentation();
 
+    if (exportHazardGeoJson) {
+      exportHazardGeoJson.disabled = lastDownstreamRaster === null;
+    }
+
+    if (hazardSummary) {
+      if (!lastDownstreamRaster) {
+        hazardSummary.dataset.visible = "false";
+        hazardSummary.textContent = "";
+      } else {
+        const summary = summarizeFloodHazard(lastDownstreamRaster);
+        hazardSummary.dataset.visible = "true";
+        hazardSummary.textContent =
+          `Hazard areas — low ${(summary.lowAreaM2 / 10_000).toFixed(2)} ha · ` +
+          `moderate ${(summary.moderateAreaM2 / 10_000).toFixed(2)} ha · ` +
+          `high ${(summary.highAreaM2 / 10_000).toFixed(2)} ha · ` +
+          `extreme ${(summary.extremeAreaM2 / 10_000).toFixed(2)} ha · ` +
+          `max D×V ${summary.maxHazardIndex.toFixed(2)} m²/s.`;
+      }
+    }
+
     if (!downstreamLegend) {
       return;
     }
@@ -263,6 +293,19 @@ export async function createScene(container: string): Promise<SceneView> {
         : 0.65;
       downstreamRasterOpacity.value = String(rasterOpacity);
       refreshDownstreamRaster();
+    });
+  }
+
+  if (exportHazardGeoJson) {
+    exportHazardGeoJson.addEventListener("click", () => {
+      if (!lastDownstreamRaster) {
+        return;
+      }
+
+      downloadHazardGeoJson(lastDownstreamRaster);
+      writeHelp(
+        "Hazard GeoJSON exported in WGS84 with depth, velocity, arrival time and experimental hazard class per wet cell."
+      );
     });
   }
 
