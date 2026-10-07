@@ -6,6 +6,8 @@ import type { DownstreamFlowPath } from "./DownstreamInundation";
 
 export interface DownstreamShallowWaterResult {
   center: Point;
+  minX: number;
+  minY: number;
   width: number;
   height: number;
   resolutionX: number;
@@ -19,17 +21,38 @@ export interface DownstreamShallowWaterResult {
   wetAreaM2: number;
   overtoppingHeadM: number;
   sourceDepthM: number;
+  peakDischargeM3s: number;
+  effectiveOverflowWidthM: number;
+  inputVolumeM3: number;
+  storedVolumeM3: number;
+  outflowVolumeM3: number;
+  massBalanceErrorPct: number;
   peakDepthM: number;
   peakVelocityMs: number;
   maxArrivalTimeS: number;
+  simulatedDurationS: number;
+  frontDistanceM: number;
+  frontSpeedMs: number;
+  simulationBlocks: number;
+  stopReason:
+    | "converged"
+    | "duration-limit"
+    | "step-limit"
+    | "domain-boundary-reached";
+  frontStillAdvancing: boolean;
 }
 
 const TARGET_CELL_SIZE_M = 20;
 const MAX_RESOLUTION = 128;
 const DOMAIN_MARGIN_M = 220;
-const STEPS = 180;
-const DT_SECONDS = 0.45;
 const GRAVITY = 9.81;
+const MIN_SIMULATION_SECONDS = 120;
+const SIMULATION_BLOCK_SECONDS = 600;
+const MAX_SIMULATION_SECONDS = 5400;
+const MAX_SIMULATION_STEPS = 7200;
+const CONVERGENCE_STEPS = 40;
+const DEPTH_CHANGE_TOLERANCE_M = 0.001;
+const WEIR_COEFFICIENT = 1.7;
 const MIN_WET_DEPTH_M = 0.03;
 const ELEVATION_BATCH_SIZE = 16384;
 
@@ -75,7 +98,8 @@ function indexOf(row: number, col: number, width: number): number {
 export async function simulateDownstreamShallowWater(
   view: SceneView,
   flow: DownstreamFlowPath,
-  overtoppingHeadM: number
+  overtoppingHeadM: number,
+  damLengthM?: number
 ): Promise<DownstreamShallowWaterResult> {
   if (flow.points.length < 2) {
     throw new Error("Downstream flow path is too short for raster simulation.");
@@ -140,30 +164,116 @@ export async function simulateDownstreamShallowWater(
     Math.max(Math.round((source[1] - minY) / cellSize), 0),
     resolutionY - 1
   );
-  const sourceDepth = Math.min(
-    Math.max(0.25 + Math.max(overtoppingHeadM, 0) * 4, 0.25),
-    4
+  const head = Math.max(overtoppingHeadM, 0);
+  const effectiveOverflowWidthM = Math.max(
+    cellSize,
+    Math.min(
+      damLengthM && Number.isFinite(damLengthM)
+        ? damLengthM * 0.25
+        : cellSize * 3,
+      cellSize * 8
+    )
+  );
+  const peakDischargeM3s =
+    WEIR_COEFFICIENT *
+    effectiveOverflowWidthM *
+    Math.pow(head, 1.5);
+  const sourcePulseSeconds = Math.min(
+    Math.max(30 + head * 90, 30),
+    180
+  );
+  const equivalentSourceDepth = Math.max(
+    head,
+    MIN_WET_DEPTH_M
+  );
+  const characteristicWaveSpeed = Math.max(
+    Math.sqrt(GRAVITY * equivalentSourceDepth),
+    1
+  );
+  const dtSeconds = Math.min(
+    Math.max((cellSize / characteristicWaveSpeed) * 0.32, 0.35),
+    1.5
   );
 
-  for (let row = Math.max(0, sourceRow - 1); row <= Math.min(resolutionY - 1, sourceRow + 1); row += 1) {
-    for (let col = Math.max(0, sourceCol - 1); col <= Math.min(resolutionX - 1, sourceCol + 1); col += 1) {
-      const index = indexOf(row, col, resolutionX);
-      if (Number.isFinite(terrain[index])) {
-        depth[index] = sourceDepth;
-        maxDepth[index] = sourceDepth;
-        arrivalTime[index] = 0;
+  const sourceIndices: number[] = [];
+  for (
+    let row = Math.max(0, sourceRow - 1);
+    row <= Math.min(resolutionY - 1, sourceRow + 1);
+    row += 1
+  ) {
+    for (
+      let col = Math.max(0, sourceCol - 1);
+      col <= Math.min(resolutionX - 1, sourceCol + 1);
+      col += 1
+    ) {
+      const sourceIndex = indexOf(row, col, resolutionX);
+      if (Number.isFinite(terrain[sourceIndex])) {
+        sourceIndices.push(sourceIndex);
       }
     }
   }
 
+  if (sourceIndices.length === 0) {
+    throw new Error("No valid terrain cells are available at the overtopping source.");
+  }
+
+  const cellAreaM2 = cellSize * cellSize;
+  let inputVolumeM3 = 0;
+  let outflowVolumeM3 = 0;
+  let boundaryReached = false;
+
   const neighbors = [
-    [-1, 0],
-    [1, 0],
-    [0, -1],
-    [0, 1]
+    [-1, 0, 1],
+    [1, 0, 1],
+    [0, -1, 1],
+    [0, 1, 1],
+    [-1, -1, Math.SQRT2],
+    [-1, 1, Math.SQRT2],
+    [1, -1, Math.SQRT2],
+    [1, 1, Math.SQRT2]
   ] as const;
 
-  for (let step = 0; step < STEPS; step += 1) {
+  let simulatedDurationS = 0;
+  let stopReason: DownstreamShallowWaterResult["stopReason"] = "duration-limit";
+  let stableSteps = 0;
+  let frontStillAdvancing = false;
+  let currentFrontDistanceM = 0;
+  let frontSpeedMs = 0;
+  let blockStartFrontDistanceM = 0;
+  let blockStartTimeS = 0;
+  let nextBlockBoundaryS = SIMULATION_BLOCK_SECONDS;
+  let simulationBlocks = 1;
+
+  for (let step = 0; step < MAX_SIMULATION_STEPS; step += 1) {
+    const simulationTime = step * dtSeconds;
+
+    if (simulationTime >= MAX_SIMULATION_SECONDS) {
+      stopReason = "duration-limit";
+      break;
+    }
+
+    // Finite-volume overtopping source. Use a triangular hydrograph based on
+    // a broad-crested weir approximation so the injected water volume is
+    // explicit and auditable rather than imposed as a persistent depth.
+    if (simulationTime <= sourcePulseSeconds && peakDischargeM3s > 0) {
+      const phase = simulationTime / Math.max(sourcePulseSeconds, 1);
+      const hydrographFactor =
+        phase <= 0.35
+          ? phase / 0.35
+          : Math.max(1 - (phase - 0.35) / 0.65, 0);
+      const dischargeM3s = peakDischargeM3s * hydrographFactor;
+      const injectedVolumeM3 = dischargeM3s * dtSeconds;
+      const injectedDepth =
+        injectedVolumeM3 /
+        (sourceIndices.length * cellAreaM2);
+
+      for (const sourceIndex of sourceIndices) {
+        depth[sourceIndex] += injectedDepth;
+      }
+
+      inputVolumeM3 += injectedVolumeM3;
+    }
+
     nextDepth.set(depth);
 
     for (let row = 1; row < resolutionY - 1; row += 1) {
@@ -180,9 +290,9 @@ export async function simulateDownstreamShallowWater(
         }
 
         const localSurface = localTerrain + localDepth;
-        let available = localDepth * 0.32;
+        let available = localDepth * 0.55;
 
-        for (const [dr, dc] of neighbors) {
+        for (const [dr, dc, distanceFactor] of neighbors) {
           if (available <= 0) {
             break;
           }
@@ -208,14 +318,23 @@ export async function simulateDownstreamShallowWater(
 
           const hydraulicDepth = Math.max(localDepth, MIN_WET_DEPTH_M);
           const waveCelerity = Math.sqrt(GRAVITY * hydraulicDepth);
+          const neighborDistance = cellSize * distanceFactor;
+          const slope = Math.min(
+            Math.max(headDifference / neighborDistance, 0),
+            1
+          );
           const velocity = Math.min(
-            waveCelerity * Math.sqrt(Math.min(headDifference / cellSize, 1)),
+            waveCelerity * Math.sqrt(slope),
             12
+          );
+          const courantNumber = Math.min(
+            velocity * dtSeconds / neighborDistance,
+            0.45
           );
           const courantTransfer = Math.min(
             available,
-            velocity * DT_SECONDS / cellSize * localDepth * 0.22,
-            headDifference * 0.16
+            courantNumber * localDepth * 0.42,
+            headDifference * 0.24
           );
 
           if (courantTransfer <= 0) {
@@ -234,26 +353,147 @@ export async function simulateDownstreamShallowWater(
       }
     }
 
+    // Open downstream/domain boundary. Water reaching the raster edge is
+    // allowed to leave instead of reflecting back and accumulating in closed
+    // edge cells. Track the removed volume for the mass balance.
+    for (let row = 0; row < resolutionY; row += 1) {
+      for (let col = 0; col < resolutionX; col += 1) {
+        if (
+          row !== 0 &&
+          row !== resolutionY - 1 &&
+          col !== 0 &&
+          col !== resolutionX - 1
+        ) {
+          continue;
+        }
+
+        const boundaryIndex = indexOf(row, col, resolutionX);
+        const boundaryDepth = nextDepth[boundaryIndex];
+        if (
+          !Number.isFinite(terrain[boundaryIndex]) ||
+          boundaryDepth <= MIN_WET_DEPTH_M
+        ) {
+          continue;
+        }
+
+        boundaryReached = true;
+        const celerity = Math.sqrt(
+          GRAVITY * Math.max(boundaryDepth, MIN_WET_DEPTH_M)
+        );
+        const drainFraction = Math.min(
+          celerity * dtSeconds / cellSize,
+          0.65
+        );
+        const drainedDepth = boundaryDepth * drainFraction;
+        nextDepth[boundaryIndex] -= drainedDepth;
+        outflowVolumeM3 += drainedDepth * cellAreaM2;
+      }
+    }
+
     const swap = depth;
     depth = nextDepth;
     nextDepth = swap;
 
-    const simulationTime = (step + 1) * DT_SECONDS;
+    const arrivalSampleTime = (step + 1) * dtSeconds;
+    let newWetCells = 0;
+    let wetCellsThisStep = 0;
+    let totalDepthChange = 0;
+
     for (let i = 0; i < count; i += 1) {
       const value = depth[i];
+      const previousValue = nextDepth[i];
+
       if (value > maxDepth[i]) {
         maxDepth[i] = value;
       }
-      if (value > MIN_WET_DEPTH_M && arrivalTime[i] < 0) {
-        arrivalTime[i] = simulationTime;
+
+      if (value > MIN_WET_DEPTH_M) {
+        wetCellsThisStep += 1;
       }
+
+      if (value > MIN_WET_DEPTH_M && arrivalTime[i] < 0) {
+        arrivalTime[i] = arrivalSampleTime;
+        newWetCells += 1;
+
+        const wetRow = Math.floor(i / resolutionX);
+        const wetCol = i % resolutionX;
+        const wetX = minX + wetCol * cellSize;
+        const wetY = minY + wetRow * cellSize;
+        currentFrontDistanceM = Math.max(
+          currentFrontDistanceM,
+          Math.hypot(wetX - source[0], wetY - source[1])
+        );
+      }
+
+      totalDepthChange += Math.abs(value - previousValue);
+    }
+
+    simulatedDurationS = arrivalSampleTime;
+    const meanDepthChange =
+      wetCellsThisStep > 0
+        ? totalDepthChange / wetCellsThisStep
+        : 0;
+
+    frontStillAdvancing = newWetCells > 0;
+
+    const sourceFinished =
+      arrivalSampleTime > sourcePulseSeconds;
+    const minimumDurationReached =
+      arrivalSampleTime >= MIN_SIMULATION_SECONDS;
+    const hydraulicallyStable =
+      newWetCells === 0 &&
+      meanDepthChange <= DEPTH_CHANGE_TOLERANCE_M;
+
+    if (
+      sourceFinished &&
+      minimumDurationReached &&
+      hydraulicallyStable
+    ) {
+      stableSteps += 1;
+    } else {
+      stableSteps = 0;
+    }
+
+    if (stableSteps >= CONVERGENCE_STEPS) {
+      stopReason = "converged";
+      frontStillAdvancing = false;
+      break;
+    }
+
+    if (arrivalSampleTime >= nextBlockBoundaryS) {
+      const blockDurationS = Math.max(
+        arrivalSampleTime - blockStartTimeS,
+        dtSeconds
+      );
+      const blockAdvanceM = Math.max(
+        currentFrontDistanceM - blockStartFrontDistanceM,
+        0
+      );
+      frontSpeedMs = blockAdvanceM / blockDurationS;
+
+      blockStartFrontDistanceM = currentFrontDistanceM;
+      blockStartTimeS = arrivalSampleTime;
+      nextBlockBoundaryS += SIMULATION_BLOCK_SECONDS;
+      simulationBlocks += 1;
+
+      if (boundaryReached) {
+        stopReason = "domain-boundary-reached";
+        frontStillAdvancing = blockAdvanceM > cellSize * 0.25;
+        break;
+      }
+    }
+
+    if (step === MAX_SIMULATION_STEPS - 1) {
+      stopReason = "step-limit";
     }
   }
 
   let wetCellCount = 0;
   let peakDepthM = 0;
+  let sourceDepthM = 0;
   let peakVelocityMs = 0;
   let maxArrivalTimeS = 0;
+  let frontDistanceM = 0;
   const sourceExclusionRadiusCells = 2;
 
   for (let i = 0; i < count; i += 1) {
@@ -264,18 +504,59 @@ export async function simulateDownstreamShallowWater(
       col - sourceCol
     );
 
-    if (distanceFromSource > sourceExclusionRadiusCells) {
+    if (distanceFromSource <= sourceExclusionRadiusCells) {
+      sourceDepthM = Math.max(sourceDepthM, maxDepth[i]);
+    } else {
       peakDepthM = Math.max(peakDepthM, maxDepth[i]);
       peakVelocityMs = Math.max(peakVelocityMs, maxVelocity[i]);
     }
 
     if (maxDepth[i] > MIN_WET_DEPTH_M) {
       wetCellCount += 1;
+
+      const x = minX + col * cellSize;
+      const y = minY + row * cellSize;
+      frontDistanceM = Math.max(
+        frontDistanceM,
+        Math.hypot(x - source[0], y - source[1])
+      );
+
       if (arrivalTime[i] >= 0) {
         maxArrivalTimeS = Math.max(maxArrivalTimeS, arrivalTime[i]);
       }
     }
   }
+
+  let storedVolumeM3 = 0;
+  for (let i = 0; i < count; i += 1) {
+    storedVolumeM3 += Math.max(depth[i], 0) * cellAreaM2;
+  }
+
+  const balanceResidualM3 =
+    inputVolumeM3 - outflowVolumeM3 - storedVolumeM3;
+  const massBalanceErrorPct =
+    inputVolumeM3 > 0
+      ? Math.abs(balanceResidualM3) / inputVolumeM3 * 100
+      : 0;
+
+  if (boundaryReached && stopReason !== "domain-boundary-reached") {
+    stopReason = "domain-boundary-reached";
+  }
+
+  if (simulatedDurationS > blockStartTimeS) {
+    const tailDurationS = simulatedDurationS - blockStartTimeS;
+    const tailAdvanceM = Math.max(
+      frontDistanceM - blockStartFrontDistanceM,
+      0
+    );
+    if (tailDurationS > 0) {
+      frontSpeedMs = tailAdvanceM / tailDurationS;
+    }
+  }
+
+  frontStillAdvancing =
+    stopReason !== "converged" &&
+    frontSpeedMs > Math.max(cellSize / 600, 0.01);
 
   return {
     center: new Point({
@@ -284,6 +565,8 @@ export async function simulateDownstreamShallowWater(
       z: source[2],
       spatialReference: flow.source.spatialReference
     }),
+    minX,
+    minY,
     width,
     height,
     resolutionX,
@@ -295,10 +578,22 @@ export async function simulateDownstreamShallowWater(
     maxVelocity,
     wetCellCount,
     wetAreaM2: wetCellCount * cellSize * cellSize,
-    overtoppingHeadM: Math.max(overtoppingHeadM, 0),
-    sourceDepthM: sourceDepth,
+    overtoppingHeadM: head,
+    sourceDepthM,
+    peakDischargeM3s,
+    effectiveOverflowWidthM,
+    inputVolumeM3,
+    storedVolumeM3,
+    outflowVolumeM3,
+    massBalanceErrorPct,
     peakDepthM,
     peakVelocityMs,
-    maxArrivalTimeS
+    maxArrivalTimeS,
+    simulatedDurationS,
+    frontDistanceM,
+    frontSpeedMs,
+    simulationBlocks,
+    stopReason,
+    frontStillAdvancing
   };
 }
