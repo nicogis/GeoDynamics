@@ -104,12 +104,12 @@ export async function createScene(container: string): Promise<SceneView> {
     qualityProfile: "high",
     camera: {
       position: {
-        longitude: 9.95,
-        latitude: 46.02,
-        z: 5500
+        longitude: 10.091749988193236,
+        latitude: 46.00360512569807,
+        z: 5045.430256512016
       },
-      tilt: 72,
-      heading: 0
+      tilt: 74.91662881403597,
+      heading: 319.8271406668986
     },
     environment: {
       atmosphereEnabled: true,
@@ -118,32 +118,6 @@ export async function createScene(container: string): Promise<SceneView> {
   });
 
   await view.when();
-
-  // TEMP: capture the exact 3D viewpoint used during testing. Once the
-  // preferred camera is promoted to the initial SceneView configuration,
-  // remove this watcher.
-  view.watch("stationary", (stationary) => {
-    if (!stationary) {
-      return;
-    }
-
-    const camera = view.camera;
-    console.info(
-      "[GeoDynamics camera]",
-      JSON.stringify(
-        {
-          position: camera.position.toJSON(),
-          longitude: camera.position.longitude,
-          latitude: camera.position.latitude,
-          z: camera.position.z,
-          heading: camera.heading,
-          tilt: camera.tilt
-        },
-        null,
-        2
-      )
-    );
-  });
 
   const rockNode = createRockRenderNode(view);
   const waterNode = createWaterRenderNode(view);
