@@ -24,6 +24,7 @@ import {
   buildDownstreamInundationSurface,
   traceDownstreamFlow
 } from "../physics/DownstreamInundation";
+import { simulateDownstreamShallowWater } from "../physics/DownstreamShallowWater";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -131,6 +132,10 @@ export async function createScene(container: string): Promise<SceneView> {
   let basinRequestId = 0;
   let downstreamTraceGeneration = 0;
   let downstreamTraceStarted = false;
+  let overtoppingPeakHeight = 0;
+  let overtoppingPeakSourceT: number | null = null;
+  let overtoppingPeakLastIncreaseAt = 0;
+  let overtoppingEventActive = false;
   let lastBasinSeed: Point | null = null;
   let lastBasinSource: "automatic" | "manual" | null = null;
   let basinRegenerationTimer: number | null = null;
@@ -155,6 +160,10 @@ export async function createScene(container: string): Promise<SceneView> {
     const requestId = ++basinRequestId;
     downstreamTraceGeneration += 1;
     downstreamTraceStarted = false;
+    overtoppingPeakHeight = 0;
+    overtoppingPeakSourceT = null;
+    overtoppingPeakLastIncreaseAt = 0;
+    overtoppingEventActive = false;
     downstreamLayer.removeAll();
     view.closePopup();
     writeStatus(
@@ -205,9 +214,49 @@ export async function createScene(container: string): Promise<SceneView> {
           : `Dam wave monitor — max wave +${state.maxWaveHeight.toFixed(2)} m · freeboard ${state.freeboard.toFixed(2)} m · margin ${Math.max(margin, 0).toFixed(2)} m.`;
         overtopping.dataset.state = state.overtopping ? "alert" : "normal";
 
+        const now = performance.now();
+
         if (
-          state.overtopping &&
+          !downstreamTraceStarted &&
           state.sourceT !== null &&
+          state.overtopping
+        ) {
+          if (!overtoppingEventActive) {
+            overtoppingEventActive = true;
+            overtoppingPeakHeight = state.maxWaveHeight;
+            overtoppingPeakSourceT = state.sourceT;
+            overtoppingPeakLastIncreaseAt = now;
+          } else if (state.maxWaveHeight > overtoppingPeakHeight + 0.002) {
+            overtoppingPeakHeight = state.maxWaveHeight;
+            overtoppingPeakSourceT = state.sourceT;
+            overtoppingPeakLastIncreaseAt = now;
+          }
+        }
+
+        const peakStable =
+          overtoppingEventActive &&
+          now - overtoppingPeakLastIncreaseAt >= 1000;
+
+        if (
+          overtoppingEventActive &&
+          !downstreamTraceStarted &&
+          damBarrier &&
+          !peakStable &&
+          downstream
+        ) {
+          const measuredHead = Math.max(
+            overtoppingPeakHeight - state.freeboard,
+            0
+          );
+          downstream.textContent =
+            `Downstream: measuring overtopping peak — head ${measuredHead.toFixed(2)} m...`;
+          downstream.dataset.state = "active";
+        }
+
+        if (
+          overtoppingEventActive &&
+          peakStable &&
+          overtoppingPeakSourceT !== null &&
           !downstreamTraceStarted &&
           damBarrier
         ) {
@@ -221,10 +270,10 @@ export async function createScene(container: string): Promise<SceneView> {
           const source = new Point({
             x:
               damBarrier.start.x +
-              (damBarrier.end.x - damBarrier.start.x) * state.sourceT,
+              (damBarrier.end.x - damBarrier.start.x) * overtoppingPeakSourceT,
             y:
               damBarrier.start.y +
-              (damBarrier.end.y - damBarrier.start.y) * state.sourceT,
+              (damBarrier.end.y - damBarrier.start.y) * overtoppingPeakSourceT,
             z: basin.damCrestElevation,
             spatialReference: damBarrier.start.spatialReference
           });
@@ -267,7 +316,7 @@ export async function createScene(container: string): Promise<SceneView> {
               }
 
               const overtoppingHead = Math.max(
-                state.maxWaveHeight - state.freeboard,
+                overtoppingPeakHeight - state.freeboard,
                 0
               );
 
@@ -277,6 +326,32 @@ export async function createScene(container: string): Promise<SceneView> {
                   flow,
                   overtoppingHead
                 );
+
+                if (traceGeneration !== downstreamTraceGeneration) {
+                  return;
+                }
+
+                if (downstream) {
+                  downstream.textContent =
+                    "Downstream: running shallow-water raster foundation...";
+                }
+
+                let shallowWater:
+                  | Awaited<ReturnType<typeof simulateDownstreamShallowWater>>
+                  | null = null;
+
+                try {
+                  shallowWater = await simulateDownstreamShallowWater(
+                    view,
+                    flow,
+                    overtoppingHead
+                  );
+                } catch (solverError: unknown) {
+                  console.warn(
+                    "Downstream shallow-water raster simulation failed:",
+                    solverError
+                  );
+                }
 
                 if (traceGeneration !== downstreamTraceGeneration) {
                   return;
@@ -309,7 +384,14 @@ export async function createScene(container: string): Promise<SceneView> {
                       attributes: {
                         areaM2: surface.areaM2,
                         maxWidthM: surface.maxWidthM,
-                        sourceStageM: surface.sourceStageM
+                        sourceStageM: surface.sourceStageM,
+                        rasterWetAreaM2: shallowWater?.wetAreaM2 ?? null,
+                        solverOvertoppingHeadM: shallowWater?.overtoppingHeadM ?? null,
+                        sourceDepthM: shallowWater?.sourceDepthM ?? null,
+                        peakDepthM: shallowWater?.peakDepthM ?? null,
+                        peakVelocityMs: shallowWater?.peakVelocityMs ?? null,
+                        maxArrivalTimeS: shallowWater?.maxArrivalTimeS ?? null,
+                        rasterCellSizeM: shallowWater?.cellSize ?? null
                       },
                       popupTemplate: {
                         title: "Downstream inundation surface",
@@ -331,6 +413,41 @@ export async function createScene(container: string): Promise<SceneView> {
                                 fieldName: "sourceStageM",
                                 label: "Source hydraulic stage (m)",
                                 format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "rasterWetAreaM2",
+                                label: "Raster wet area (m²)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "solverOvertoppingHeadM",
+                                label: "Solver overtopping head (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "sourceDepthM",
+                                label: "Source depth (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "peakDepthM",
+                                label: "Max downstream depth (m)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "peakVelocityMs",
+                                label: "Raster peak velocity (m/s)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "maxArrivalTimeS",
+                                label: "Latest arrival time (s)",
+                                format: { digitSeparator: true, places: 1 }
+                              },
+                              {
+                                fieldName: "rasterCellSizeM",
+                                label: "Raster cell size (m)",
+                                format: { digitSeparator: true, places: 1 }
                               }
                             ]
                           }
@@ -339,13 +456,20 @@ export async function createScene(container: string): Promise<SceneView> {
                     })
                   );
 
-                  writeHelp(
-                    `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m.`
-                  );
+                  if (shallowWater) {
+                    writeHelp(
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                    );
+                  } else {
+                    writeHelp(
+                      `Downstream inundation surface generated — ${(surface.areaM2 / 10_000).toFixed(2)} ha · max width ${surface.maxWidthM.toFixed(0)} m · source stage ${surface.sourceStageM.toFixed(2)} m · path ${flow.lengthM.toFixed(0)} m. Raster solver unavailable for this run.`
+                    );
+                  }
                   if (downstream) {
-                    downstream.textContent =
-                      `Downstream: inundation surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha.`;
-                    downstream.dataset.state = "active";
+                    downstream.textContent = shallowWater
+                      ? `Downstream: raster foundation ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha.`
+                      : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
+                    downstream.dataset.state = shallowWater ? "active" : "error";
                   }
                 } else {
                   writeHelp(
@@ -756,6 +880,10 @@ export async function createScene(container: string): Promise<SceneView> {
           downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
           downstreamTraceStarted = false;
+          overtoppingPeakHeight = 0;
+          overtoppingPeakSourceT = null;
+          overtoppingPeakLastIncreaseAt = 0;
+          overtoppingEventActive = false;
           if (downstream) {
             downstream.textContent = "Downstream: waiting for overtopping.";
             downstream.dataset.state = "waiting";
@@ -889,6 +1017,10 @@ export async function createScene(container: string): Promise<SceneView> {
       downstreamLayer.removeAll();
       trajectoryGraphic = null;
       downstreamTraceStarted = false;
+      overtoppingPeakHeight = 0;
+      overtoppingPeakSourceT = null;
+      overtoppingPeakLastIncreaseAt = 0;
+      overtoppingEventActive = false;
 
       waterNode.resetDynamics();
 
