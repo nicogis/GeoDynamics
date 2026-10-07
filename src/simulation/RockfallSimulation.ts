@@ -70,6 +70,13 @@ export interface WaterInteraction {
   addImpact(point: Point, speed: number): void;
 }
 
+export interface DamCollisionGeometry {
+  crestElevation: number;
+  profilePoints: number[][];
+}
+
+export type DamCollisionProvider = () => DamCollisionGeometry | null;
+
 export class RockfallSimulation {
   private readonly rapierReady = RAPIER.init();
   private readonly view: SceneView;
@@ -78,6 +85,7 @@ export class RockfallSimulation {
   private readonly writeTrajectory: TrajectoryWriter;
   private readonly writeResult: ResultWriter;
   private readonly water: WaterInteraction;
+  private readonly damCollision: DamCollisionProvider;
   private readonly settings: SimulationSettings;
 
   private world: RAPIER.World | null = null;
@@ -105,6 +113,7 @@ export class RockfallSimulation {
     writeTrajectory: TrajectoryWriter,
     writeResult: ResultWriter,
     water: WaterInteraction,
+    damCollision: DamCollisionProvider,
     settings: SimulationSettings
   ) {
     this.view = view;
@@ -113,6 +122,7 @@ export class RockfallSimulation {
     this.writeTrajectory = writeTrajectory;
     this.writeResult = writeResult;
     this.water = water;
+    this.damCollision = damCollision;
     this.settings = settings;
   }
 
@@ -144,6 +154,77 @@ export class RockfallSimulation {
       .setRestitution(0.05);
 
     world.createCollider(terrainCollider);
+
+    const damGeometry = this.damCollision();
+    let damColliderCount = 0;
+
+    if (damGeometry) {
+      const crestElevation = damGeometry.crestElevation;
+      const profile = damGeometry.profilePoints;
+      const wallThickness = Math.max(
+        2,
+        Math.min(this.settings.rockRadius * 0.35, 6)
+      );
+
+      for (let i = 0; i < profile.length - 1; i += 1) {
+        const a = profile[i];
+        const b = profile[i + 1];
+
+        if (
+          a.length < 3 ||
+          b.length < 3 ||
+          !a.every(Number.isFinite) ||
+          !b.every(Number.isFinite)
+        ) {
+          continue;
+        }
+
+        const ax = a[0] - terrain.origin.x;
+        const az = a[1] - terrain.origin.y;
+        const bx = b[0] - terrain.origin.x;
+        const bz = b[1] - terrain.origin.y;
+        const dx = bx - ax;
+        const dz = bz - az;
+        const segmentLength = Math.hypot(dx, dz);
+
+        if (segmentLength < 0.5) {
+          continue;
+        }
+
+        const baseElevation = Math.min(a[2], b[2]);
+        const wallHeight = crestElevation - baseElevation;
+
+        if (wallHeight <= 0.25) {
+          continue;
+        }
+
+        const centerX = (ax + bx) * 0.5;
+        const centerZ = (az + bz) * 0.5;
+        const centerY =
+          ((baseElevation + crestElevation) * 0.5) -
+          (terrain.origin.z ?? 0);
+        const angle = Math.atan2(dz, dx);
+        const halfAngle = angle * 0.5;
+
+        const damCollider = RAPIER.ColliderDesc.cuboid(
+          segmentLength * 0.5,
+          wallHeight * 0.5,
+          wallThickness * 0.5
+        )
+          .setTranslation(centerX, centerY, centerZ)
+          .setRotation({
+            x: 0,
+            y: Math.sin(halfAngle),
+            z: 0,
+            w: Math.cos(halfAngle)
+          })
+          .setFriction(0.85)
+          .setRestitution(0.18);
+
+        world.createCollider(damCollider);
+        damColliderCount += 1;
+      }
+    }
 
     const body = world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic().setTranslation(
@@ -191,7 +272,7 @@ export class RockfallSimulation {
     const triangles = terrain.indices.length / 3;
 
     this.writeStatus(
-      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles. Irregular convex rock released ${this.settings.releaseHeight} m above ground.`
+      `Rapier ready — terrain ${terrain.span.toFixed(0)} m × ${terrain.span.toFixed(0)} m, ${terrain.rows}×${terrain.cols} samples, ${triangles} triangles · dam colliders ${damColliderCount}. Irregular convex rock released ${this.settings.releaseHeight} m above ground.`
     );
 
     this.animate(runId);
