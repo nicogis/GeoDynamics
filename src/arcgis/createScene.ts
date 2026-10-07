@@ -119,6 +119,32 @@ export async function createScene(container: string): Promise<SceneView> {
 
   await view.when();
 
+  // TEMP: capture the exact 3D viewpoint used during testing. Once the
+  // preferred camera is promoted to the initial SceneView configuration,
+  // remove this watcher.
+  view.watch("stationary", (stationary) => {
+    if (!stationary) {
+      return;
+    }
+
+    const camera = view.camera;
+    console.info(
+      "[GeoDynamics camera]",
+      JSON.stringify(
+        {
+          position: camera.position.toJSON(),
+          longitude: camera.position.longitude,
+          latitude: camera.position.latitude,
+          z: camera.position.z,
+          heading: camera.heading,
+          tilt: camera.tilt
+        },
+        null,
+        2
+      )
+    );
+  });
+
   const rockNode = createRockRenderNode(view);
   const waterNode = createWaterRenderNode(view);
   const settings = createSimulationSettings();
