@@ -4,8 +4,17 @@ import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer";
 import SimpleFillSymbol from "@arcgis/core/symbols/SimpleFillSymbol";
 
 import type { DownstreamShallowWaterResult } from "../physics/DownstreamShallowWater";
+import {
+  classifyFloodHazard,
+  floodHazardIndex
+} from "./HazardOutputs";
 
-export type DownstreamRasterMetric = "depth" | "velocity" | "arrival" | "off";
+export type DownstreamRasterMetric =
+  | "depth"
+  | "velocity"
+  | "arrival"
+  | "hazard"
+  | "off";
 
 export interface DownstreamRasterLegend {
   title: string;
@@ -57,6 +66,11 @@ function metricValue(
       return result.maxVelocity[index];
     case "arrival":
       return result.arrivalTime[index];
+    case "hazard":
+      return floodHazardIndex(
+        result.maxDepth[index],
+        result.maxVelocity[index]
+      );
   }
 }
 
@@ -71,6 +85,11 @@ function metricMaximum(
       return Math.max(result.peakVelocityMs, 0.1);
     case "arrival":
       return Math.max(result.maxArrivalTimeS, 1);
+    case "hazard":
+      return Math.max(
+        result.peakDepthM * result.peakVelocityMs,
+        0.5
+      );
   }
 }
 
@@ -98,6 +117,13 @@ function metricColor(
         [80, 55, 150],
         [45, 185, 185],
         [245, 220, 75],
+        normalized
+      );
+    case "hazard":
+      return threeStopColor(
+        [85, 190, 95],
+        [245, 190, 55],
+        [190, 35, 35],
         normalized
       );
   }
@@ -147,6 +173,11 @@ export function renderDownstreamRaster(
       const y = result.minY + row * result.cellSize;
       const value = metricValue(result, metric, index);
       const normalized = clamp01(value / maxValue);
+      const hazardIndex = floodHazardIndex(
+        result.maxDepth[index],
+        result.maxVelocity[index]
+      );
+      const hazardClass = classifyFloodHazard(hazardIndex);
       const [r, g, b] = metricColor(metric, normalized);
 
       const polygon = new Polygon({
@@ -173,7 +204,13 @@ export function renderDownstreamRaster(
           attributes: {
             maxDepthM: result.maxDepth[index],
             peakVelocityMs: result.maxVelocity[index],
-            arrivalTimeS: result.arrivalTime[index],
+            arrivalTimeS:
+              result.arrivalTime[index] >= 0
+                ? result.arrivalTime[index]
+                : null,
+            thinSheet: result.arrivalTime[index] < 0,
+            hazardIndex,
+            hazardClass,
             cellSizeM: result.cellSize
           },
           popupTemplate: {
@@ -196,6 +233,19 @@ export function renderDownstreamRaster(
                     fieldName: "arrivalTimeS",
                     label: "Arrival time (s)",
                     format: { digitSeparator: true, places: 1 }
+                  },
+                  {
+                    fieldName: "thinSheet",
+                    label: "Thin sheet"
+                  },
+                  {
+                    fieldName: "hazardIndex",
+                    label: "Hazard index (depth × velocity)",
+                    format: { digitSeparator: true, places: 2 }
+                  },
+                  {
+                    fieldName: "hazardClass",
+                    label: "Hazard class"
                   },
                   {
                     fieldName: "cellSizeM",
@@ -243,6 +293,13 @@ export function getDownstreamRasterLegend(
         minLabel: "0 s",
         maxLabel: `${result.maxArrivalTimeS.toFixed(1)} s`,
         gradient: "linear-gradient(90deg, rgb(80,55,150), rgb(45,185,185), rgb(245,220,75))"
+      };
+    case "hazard":
+      return {
+        title: "Experimental hazard index",
+        minLabel: "Low",
+        maxLabel: "Extreme",
+        gradient: "linear-gradient(90deg, rgb(85,190,95), rgb(245,190,55), rgb(190,35,35))"
       };
   }
 }

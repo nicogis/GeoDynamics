@@ -82,6 +82,7 @@
               <option value="depth">Max depth</option>
               <option value="velocity">Peak velocity</option>
               <option value="arrival">Arrival time</option>
+              <option value="hazard">Hazard index</option>
               <option value="off">Off</option>
             </select>
           </label>
@@ -92,6 +93,10 @@
           </label>
 
           <div id="downstreamLegend" class="raster-legend" data-visible="false"></div>
+          <div id="hazardSummary" class="hazard-summary" data-visible="false"></div>
+          <button id="exportHazardGeoJson" class="export-button" type="button" disabled>
+            Export hazard GeoJSON
+          </button>
         </div>
       </details>
 
