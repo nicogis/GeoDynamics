@@ -21,12 +21,22 @@ export interface DownstreamShallowWaterResult {
   wetAreaM2: number;
   overtoppingHeadM: number;
   sourceDepthM: number;
+  peakDischargeM3s: number;
+  effectiveOverflowWidthM: number;
+  inputVolumeM3: number;
+  storedVolumeM3: number;
+  outflowVolumeM3: number;
+  massBalanceErrorPct: number;
   peakDepthM: number;
   peakVelocityMs: number;
   maxArrivalTimeS: number;
   simulatedDurationS: number;
   frontDistanceM: number;
-  stopReason: "converged" | "duration-limit" | "step-limit";
+  stopReason:
+    | "converged"
+    | "duration-limit"
+    | "step-limit"
+    | "domain-boundary-reached";
   frontStillAdvancing: boolean;
 }
 
@@ -39,6 +49,7 @@ const MAX_SIMULATION_SECONDS = 1800;
 const MAX_SIMULATION_STEPS = 2400;
 const CONVERGENCE_STEPS = 40;
 const DEPTH_CHANGE_TOLERANCE_M = 0.001;
+const WEIR_COEFFICIENT = 1.7;
 const MIN_WET_DEPTH_M = 0.03;
 const ELEVATION_BATCH_SIZE = 16384;
 
@@ -84,7 +95,8 @@ function indexOf(row: number, col: number, width: number): number {
 export async function simulateDownstreamShallowWater(
   view: SceneView,
   flow: DownstreamFlowPath,
-  overtoppingHeadM: number
+  overtoppingHeadM: number,
+  damLengthM?: number
 ): Promise<DownstreamShallowWaterResult> {
   if (flow.points.length < 2) {
     throw new Error("Downstream flow path is too short for raster simulation.");
@@ -149,34 +161,63 @@ export async function simulateDownstreamShallowWater(
     Math.max(Math.round((source[1] - minY) / cellSize), 0),
     resolutionY - 1
   );
-  const sourceDepth = Math.min(
-    Math.max(0.25 + Math.max(overtoppingHeadM, 0) * 4, 0.25),
-    4
+  const head = Math.max(overtoppingHeadM, 0);
+  const effectiveOverflowWidthM = Math.max(
+    cellSize,
+    Math.min(
+      damLengthM && Number.isFinite(damLengthM)
+        ? damLengthM * 0.25
+        : cellSize * 3,
+      cellSize * 8
+    )
   );
-
+  const peakDischargeM3s =
+    WEIR_COEFFICIENT *
+    effectiveOverflowWidthM *
+    Math.pow(head, 1.5);
+  const sourcePulseSeconds = Math.min(
+    Math.max(30 + head * 90, 30),
+    180
+  );
+  const equivalentSourceDepth = Math.max(
+    head,
+    MIN_WET_DEPTH_M
+  );
   const characteristicWaveSpeed = Math.max(
-    Math.sqrt(GRAVITY * sourceDepth),
+    Math.sqrt(GRAVITY * equivalentSourceDepth),
     1
   );
   const dtSeconds = Math.min(
     Math.max((cellSize / characteristicWaveSpeed) * 0.32, 0.35),
     1.5
   );
-  const sourcePulseSeconds = Math.min(
-    Math.max(20 + Math.max(overtoppingHeadM, 0) * 70, 20),
-    90
-  );
 
-  for (let row = Math.max(0, sourceRow - 1); row <= Math.min(resolutionY - 1, sourceRow + 1); row += 1) {
-    for (let col = Math.max(0, sourceCol - 1); col <= Math.min(resolutionX - 1, sourceCol + 1); col += 1) {
-      const index = indexOf(row, col, resolutionX);
-      if (Number.isFinite(terrain[index])) {
-        depth[index] = sourceDepth;
-        maxDepth[index] = sourceDepth;
-        arrivalTime[index] = 0;
+  const sourceIndices: number[] = [];
+  for (
+    let row = Math.max(0, sourceRow - 1);
+    row <= Math.min(resolutionY - 1, sourceRow + 1);
+    row += 1
+  ) {
+    for (
+      let col = Math.max(0, sourceCol - 1);
+      col <= Math.min(resolutionX - 1, sourceCol + 1);
+      col += 1
+    ) {
+      const sourceIndex = indexOf(row, col, resolutionX);
+      if (Number.isFinite(terrain[sourceIndex])) {
+        sourceIndices.push(sourceIndex);
       }
     }
   }
+
+  if (sourceIndices.length === 0) {
+    throw new Error("No valid terrain cells are available at the overtopping source.");
+  }
+
+  const cellAreaM2 = cellSize * cellSize;
+  let inputVolumeM3 = 0;
+  let outflowVolumeM3 = 0;
+  let boundaryReached = false;
 
   const neighbors = [
     [-1, 0, 1],
@@ -202,36 +243,26 @@ export async function simulateDownstreamShallowWater(
       break;
     }
 
-    // Treat the overtopping crest as a short-lived hydraulic head boundary
-    // rather than a one-frame water blob. This gives the downstream solver a
-    // finite-duration source pulse and lets the flood wave propagate through
-    // long valleys before the forcing decays.
-    if (simulationTime <= sourcePulseSeconds) {
-      const pulse = Math.max(
-        1 - simulationTime / Math.max(sourcePulseSeconds, 1),
-        0.35
-      );
-      const boundaryDepth = sourceDepth * pulse;
+    // Finite-volume overtopping source. Use a triangular hydrograph based on
+    // a broad-crested weir approximation so the injected water volume is
+    // explicit and auditable rather than imposed as a persistent depth.
+    if (simulationTime <= sourcePulseSeconds && peakDischargeM3s > 0) {
+      const phase = simulationTime / Math.max(sourcePulseSeconds, 1);
+      const hydrographFactor =
+        phase <= 0.35
+          ? phase / 0.35
+          : Math.max(1 - (phase - 0.35) / 0.65, 0);
+      const dischargeM3s = peakDischargeM3s * hydrographFactor;
+      const injectedVolumeM3 = dischargeM3s * dtSeconds;
+      const injectedDepth =
+        injectedVolumeM3 /
+        (sourceIndices.length * cellAreaM2);
 
-      for (
-        let row = Math.max(0, sourceRow - 1);
-        row <= Math.min(resolutionY - 1, sourceRow + 1);
-        row += 1
-      ) {
-        for (
-          let col = Math.max(0, sourceCol - 1);
-          col <= Math.min(resolutionX - 1, sourceCol + 1);
-          col += 1
-        ) {
-          const sourceIndex = indexOf(row, col, resolutionX);
-          if (Number.isFinite(terrain[sourceIndex])) {
-            depth[sourceIndex] = Math.max(
-              depth[sourceIndex],
-              boundaryDepth
-            );
-          }
-        }
+      for (const sourceIndex of sourceIndices) {
+        depth[sourceIndex] += injectedDepth;
       }
+
+      inputVolumeM3 += injectedVolumeM3;
     }
 
     nextDepth.set(depth);
@@ -313,6 +344,43 @@ export async function simulateDownstreamShallowWater(
       }
     }
 
+    // Open downstream/domain boundary. Water reaching the raster edge is
+    // allowed to leave instead of reflecting back and accumulating in closed
+    // edge cells. Track the removed volume for the mass balance.
+    for (let row = 0; row < resolutionY; row += 1) {
+      for (let col = 0; col < resolutionX; col += 1) {
+        if (
+          row !== 0 &&
+          row !== resolutionY - 1 &&
+          col !== 0 &&
+          col !== resolutionX - 1
+        ) {
+          continue;
+        }
+
+        const boundaryIndex = indexOf(row, col, resolutionX);
+        const boundaryDepth = nextDepth[boundaryIndex];
+        if (
+          !Number.isFinite(terrain[boundaryIndex]) ||
+          boundaryDepth <= MIN_WET_DEPTH_M
+        ) {
+          continue;
+        }
+
+        boundaryReached = true;
+        const celerity = Math.sqrt(
+          GRAVITY * Math.max(boundaryDepth, MIN_WET_DEPTH_M)
+        );
+        const drainFraction = Math.min(
+          celerity * dtSeconds / cellSize,
+          0.65
+        );
+        const drainedDepth = boundaryDepth * drainFraction;
+        nextDepth[boundaryIndex] -= drainedDepth;
+        outflowVolumeM3 += drainedDepth * cellAreaM2;
+      }
+    }
+
     const swap = depth;
     depth = nextDepth;
     nextDepth = swap;
@@ -381,6 +449,7 @@ export async function simulateDownstreamShallowWater(
 
   let wetCellCount = 0;
   let peakDepthM = 0;
+  let sourceDepthM = 0;
   let peakVelocityMs = 0;
   let maxArrivalTimeS = 0;
   let frontDistanceM = 0;
@@ -394,7 +463,9 @@ export async function simulateDownstreamShallowWater(
       col - sourceCol
     );
 
-    if (distanceFromSource > sourceExclusionRadiusCells) {
+    if (distanceFromSource <= sourceExclusionRadiusCells) {
+      sourceDepthM = Math.max(sourceDepthM, maxDepth[i]);
+    } else {
       peakDepthM = Math.max(peakDepthM, maxDepth[i]);
       peakVelocityMs = Math.max(peakVelocityMs, maxVelocity[i]);
     }
@@ -413,6 +484,22 @@ export async function simulateDownstreamShallowWater(
         maxArrivalTimeS = Math.max(maxArrivalTimeS, arrivalTime[i]);
       }
     }
+  }
+
+  let storedVolumeM3 = 0;
+  for (let i = 0; i < count; i += 1) {
+    storedVolumeM3 += Math.max(depth[i], 0) * cellAreaM2;
+  }
+
+  const balanceResidualM3 =
+    inputVolumeM3 - outflowVolumeM3 - storedVolumeM3;
+  const massBalanceErrorPct =
+    inputVolumeM3 > 0
+      ? Math.abs(balanceResidualM3) / inputVolumeM3 * 100
+      : 0;
+
+  if (boundaryReached) {
+    stopReason = "domain-boundary-reached";
   }
 
   return {
