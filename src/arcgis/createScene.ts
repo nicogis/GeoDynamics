@@ -514,6 +514,10 @@ export async function createScene(container: string): Promise<SceneView> {
                         peakDepthM: shallowWater?.peakDepthM ?? null,
                         peakVelocityMs: shallowWater?.peakVelocityMs ?? null,
                         maxArrivalTimeS: shallowWater?.maxArrivalTimeS ?? null,
+                        simulatedDurationS: shallowWater?.simulatedDurationS ?? null,
+                        frontDistanceM: shallowWater?.frontDistanceM ?? null,
+                        solverStopReason: shallowWater?.stopReason ?? null,
+                        frontStillAdvancing: shallowWater?.frontStillAdvancing ?? null,
                         rasterCellSizeM: shallowWater?.cellSize ?? null
                       },
                       popupTemplate: {
@@ -568,6 +572,24 @@ export async function createScene(container: string): Promise<SceneView> {
                                 format: { digitSeparator: true, places: 1 }
                               },
                               {
+                                fieldName: "simulatedDurationS",
+                                label: "Simulated duration (s)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "frontDistanceM",
+                                label: "Front distance (m)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "solverStopReason",
+                                label: "Solver stop reason"
+                              },
+                              {
+                                fieldName: "frontStillAdvancing",
+                                label: "Front still advancing"
+                              },
+                              {
                                 fieldName: "rasterCellSizeM",
                                 label: "Raster cell size (m)",
                                 format: { digitSeparator: true, places: 1 }
@@ -582,7 +604,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s · front ${shallowWater.frontDistanceM.toFixed(0)} m · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
@@ -591,7 +613,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   }
                   if (downstream) {
                     downstream.textContent = shallowWater
-                      ? `Downstream: raster foundation ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha.`
+                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}.`
                       : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
                     downstream.dataset.state = shallowWater ? "active" : "error";
                   }
