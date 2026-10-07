@@ -154,6 +154,8 @@ export async function createScene(container: string): Promise<SceneView> {
   let damPreviewGraphic: Graphic | null = null;
   let damGroundPreviewGraphic: Graphic | null = null;
   let damWaterLevelGraphic: Graphic | null = null;
+  let lastDamProfilePoints: number[][] | null = null;
+  let lastDamCrestElevation: number | null = null;
   let basinRequestId = 0;
   let downstreamTraceGeneration = 0;
   let downstreamTraceStarted = false;
@@ -303,6 +305,9 @@ export async function createScene(container: string): Promise<SceneView> {
     if (requestId !== basinRequestId) {
       return;
     }
+
+    lastDamProfilePoints = basin.damProfilePoints.map((point) => [...point]);
+    lastDamCrestElevation = basin.damCrestElevation;
 
     waterNode.setBasin(
       basin.center,
@@ -998,6 +1003,20 @@ export async function createScene(container: string): Promise<SceneView> {
       containsPoint: (point) => waterNode.containsPoint(point),
       addImpact: (point, speed) => waterNode.addImpact(point, speed)
     },
+    () => {
+      if (
+        lastDamCrestElevation === null ||
+        !lastDamProfilePoints ||
+        lastDamProfilePoints.length < 2
+      ) {
+        return null;
+      }
+
+      return {
+        crestElevation: lastDamCrestElevation,
+        profilePoints: lastDamProfilePoints
+      };
+    },
     settings
   );
 
@@ -1083,6 +1102,8 @@ export async function createScene(container: string): Promise<SceneView> {
           damLayer.removeAll();
           damGroundPreviewLayer.removeAll();
           damFaceLayer.removeAll();
+          lastDamProfilePoints = null;
+          lastDamCrestElevation = null;
           downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
           downstreamRasterLayer.removeAll();
