@@ -534,6 +534,8 @@ export async function createScene(container: string): Promise<SceneView> {
                         maxArrivalTimeS: shallowWater?.maxArrivalTimeS ?? null,
                         simulatedDurationS: shallowWater?.simulatedDurationS ?? null,
                         frontDistanceM: shallowWater?.frontDistanceM ?? null,
+                        frontSpeedMs: shallowWater?.frontSpeedMs ?? null,
+                        simulationBlocks: shallowWater?.simulationBlocks ?? null,
                         solverStopReason: shallowWater?.stopReason ?? null,
                         frontStillAdvancing: shallowWater?.frontStillAdvancing ?? null,
                         rasterCellSizeM: shallowWater?.cellSize ?? null
@@ -630,6 +632,15 @@ export async function createScene(container: string): Promise<SceneView> {
                                 format: { digitSeparator: true, places: 0 }
                               },
                               {
+                                fieldName: "frontSpeedMs",
+                                label: "Front speed (m/s)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "simulationBlocks",
+                                label: "Simulation blocks"
+                              },
+                              {
                                 fieldName: "solverStopReason",
                                 label: "Solver stop reason"
                               },
@@ -652,7 +663,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(2)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s · front ${shallowWater.frontDistanceM.toFixed(0)} m · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(2)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s / ${shallowWater.simulationBlocks} blocks · front ${shallowWater.frontDistanceM.toFixed(0)} m @ ${shallowWater.frontSpeedMs.toFixed(2)} m/s · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
