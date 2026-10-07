@@ -23,6 +23,8 @@ export interface DownstreamShallowWaterResult {
   sourceDepthM: number;
   peakDischargeM3s: number;
   effectiveOverflowWidthM: number;
+  manningN: number;
+  hydrographDurationS: number;
   inputVolumeM3: number;
   storedVolumeM3: number;
   outflowVolumeM3: number;
@@ -34,6 +36,8 @@ export interface DownstreamShallowWaterResult {
   frontDistanceM: number;
   frontSpeedMs: number;
   simulationBlocks: number;
+  domainExpansionCount: number;
+  domainMarginM: number;
   stopReason:
     | "converged"
     | "duration-limit"
@@ -45,6 +49,9 @@ export interface DownstreamShallowWaterResult {
 const TARGET_CELL_SIZE_M = 20;
 const MAX_RESOLUTION = 128;
 const DOMAIN_MARGIN_M = 220;
+const DOMAIN_EXPANSION_FACTOR = 1.5;
+const MAX_DOMAIN_EXPANSIONS = 3;
+const MAX_ADAPTIVE_RESOLUTION = 256;
 const GRAVITY = 9.81;
 const MIN_SIMULATION_SECONDS = 120;
 const SIMULATION_BLOCK_SECONDS = 600;
@@ -53,6 +60,7 @@ const MAX_SIMULATION_STEPS = 7200;
 const CONVERGENCE_STEPS = 40;
 const DEPTH_CHANGE_TOLERANCE_M = 0.001;
 const WEIR_COEFFICIENT = 1.7;
+const MANNING_N = 0.045;
 const MIN_WET_DEPTH_M = 0.03;
 const ELEVATION_BATCH_SIZE = 16384;
 
@@ -95,11 +103,13 @@ function indexOf(row: number, col: number, width: number): number {
   return row * width + col;
 }
 
-export async function simulateDownstreamShallowWater(
+async function simulateDownstreamShallowWaterAttempt(
   view: SceneView,
   flow: DownstreamFlowPath,
   overtoppingHeadM: number,
-  damLengthM?: number
+  measuredOverflowWidthM: number | undefined,
+  domainMarginM: number,
+  maxResolution: number
 ): Promise<DownstreamShallowWaterResult> {
   if (flow.points.length < 2) {
     throw new Error("Downstream flow path is too short for raster simulation.");
@@ -107,16 +117,16 @@ export async function simulateDownstreamShallowWater(
 
   const xs = flow.points.map((point) => point[0]);
   const ys = flow.points.map((point) => point[1]);
-  const minX = Math.min(...xs) - DOMAIN_MARGIN_M;
-  const maxX = Math.max(...xs) + DOMAIN_MARGIN_M;
-  const minY = Math.min(...ys) - DOMAIN_MARGIN_M;
-  const maxY = Math.max(...ys) + DOMAIN_MARGIN_M;
+  const minX = Math.min(...xs) - domainMarginM;
+  const maxX = Math.max(...xs) + domainMarginM;
+  const minY = Math.min(...ys) - domainMarginM;
+  const maxY = Math.max(...ys) + domainMarginM;
   const width = Math.max(maxX - minX, TARGET_CELL_SIZE_M * 8);
   const height = Math.max(maxY - minY, TARGET_CELL_SIZE_M * 8);
 
   const scale = Math.max(
-    width / (MAX_RESOLUTION - 1),
-    height / (MAX_RESOLUTION - 1),
+    width / (maxResolution - 1),
+    height / (maxResolution - 1),
     TARGET_CELL_SIZE_M
   );
   const resolutionX = Math.max(8, Math.ceil(width / scale) + 1);
@@ -165,22 +175,26 @@ export async function simulateDownstreamShallowWater(
     resolutionY - 1
   );
   const head = Math.max(overtoppingHeadM, 0);
-  const effectiveOverflowWidthM = Math.max(
-    cellSize,
-    Math.min(
-      damLengthM && Number.isFinite(damLengthM)
-        ? damLengthM * 0.25
-        : cellSize * 3,
-      cellSize * 8
-    )
-  );
+  const effectiveOverflowWidthM =
+    measuredOverflowWidthM !== undefined &&
+    Number.isFinite(measuredOverflowWidthM) &&
+    measuredOverflowWidthM > 0
+      ? Math.max(measuredOverflowWidthM, 1)
+      : cellSize * 3;
   const peakDischargeM3s =
     WEIR_COEFFICIENT *
     effectiveOverflowWidthM *
     Math.pow(head, 1.5);
+
+  // A compact triangular breach/overtopping hydrograph. The duration grows
+  // with head and with the measured crest width so larger overtopping zones
+  // do not inject the same short pulse as a single-cell crest crossing.
   const sourcePulseSeconds = Math.min(
-    Math.max(30 + head * 90, 30),
-    180
+    Math.max(
+      30 + head * 90 + Math.sqrt(effectiveOverflowWidthM) * 4,
+      30
+    ),
+    240
   );
   const equivalentSourceDepth = Math.max(
     head,
@@ -221,6 +235,16 @@ export async function simulateDownstreamShallowWater(
   let inputVolumeM3 = 0;
   let outflowVolumeM3 = 0;
   let boundaryReached = false;
+
+  const outlet = flow.points[flow.points.length - 1];
+  const outletDistances = [
+    { edge: "left" as const, distance: Math.abs(outlet[0] - minX) },
+    { edge: "right" as const, distance: Math.abs(maxX - outlet[0]) },
+    { edge: "bottom" as const, distance: Math.abs(outlet[1] - minY) },
+    { edge: "top" as const, distance: Math.abs(maxY - outlet[1]) }
+  ];
+  outletDistances.sort((a, b) => a.distance - b.distance);
+  const outletEdge = outletDistances[0].edge;
 
   const neighbors = [
     [-1, 0, 1],
@@ -323,9 +347,22 @@ export async function simulateDownstreamShallowWater(
             Math.max(headDifference / neighborDistance, 0),
             1
           );
+
+          // Kinematic-wave velocity using Manning friction. This is still a
+          // reduced-order raster solver rather than a full momentum-equation
+          // SWE implementation, but velocity now responds to roughness,
+          // hydraulic depth and slope instead of being derived only from
+          // gravity-wave celerity.
+          const manningVelocity =
+            slope > 0
+              ? (1 / MANNING_N) *
+                Math.pow(hydraulicDepth, 2 / 3) *
+                Math.sqrt(slope)
+              : 0;
           const velocity = Math.min(
-            waveCelerity * Math.sqrt(slope),
-            12
+            manningVelocity,
+            waveCelerity * 2.5,
+            15
           );
           const courantNumber = Math.min(
             velocity * dtSeconds / neighborDistance,
@@ -376,7 +413,20 @@ export async function simulateDownstreamShallowWater(
           continue;
         }
 
-        boundaryReached = true;
+        const isOutletCell =
+          (outletEdge === "left" && col === 0) ||
+          (outletEdge === "right" && col === resolutionX - 1) ||
+          (outletEdge === "bottom" && row === 0) ||
+          (outletEdge === "top" && row === resolutionY - 1);
+
+        if (!isOutletCell) {
+          // Reaching a lateral/upstream edge means the computational domain
+          // is too small for the current event. Keep the water in-domain for
+          // mass accounting and stop at the next block boundary.
+          boundaryReached = true;
+          continue;
+        }
+
         const celerity = Math.sqrt(
           GRAVITY * Math.max(boundaryDepth, MIN_WET_DEPTH_M)
         );
@@ -582,6 +632,8 @@ export async function simulateDownstreamShallowWater(
     sourceDepthM,
     peakDischargeM3s,
     effectiveOverflowWidthM,
+    manningN: MANNING_N,
+    hydrographDurationS: sourcePulseSeconds,
     inputVolumeM3,
     storedVolumeM3,
     outflowVolumeM3,
@@ -593,7 +645,67 @@ export async function simulateDownstreamShallowWater(
     frontDistanceM,
     frontSpeedMs,
     simulationBlocks,
+    domainExpansionCount: 0,
+    domainMarginM,
     stopReason,
     frontStillAdvancing
   };
+}
+
+
+export async function simulateDownstreamShallowWater(
+  view: SceneView,
+  flow: DownstreamFlowPath,
+  overtoppingHeadM: number,
+  measuredOverflowWidthM?: number
+): Promise<DownstreamShallowWaterResult> {
+  let domainMarginM = DOMAIN_MARGIN_M;
+  let lastResult: DownstreamShallowWaterResult | null = null;
+
+  for (
+    let expansion = 0;
+    expansion <= MAX_DOMAIN_EXPANSIONS;
+    expansion += 1
+  ) {
+    const resolutionScale = Math.pow(
+      DOMAIN_EXPANSION_FACTOR,
+      expansion
+    );
+    const maxResolution = Math.min(
+      Math.max(
+        MAX_RESOLUTION,
+        Math.round(MAX_RESOLUTION * resolutionScale)
+      ),
+      MAX_ADAPTIVE_RESOLUTION
+    );
+
+    const result = await simulateDownstreamShallowWaterAttempt(
+      view,
+      flow,
+      overtoppingHeadM,
+      measuredOverflowWidthM,
+      domainMarginM,
+      maxResolution
+    );
+
+    result.domainExpansionCount = expansion;
+    result.domainMarginM = domainMarginM;
+    lastResult = result;
+
+    const needsExpansion =
+      result.stopReason === "domain-boundary-reached" &&
+      result.frontStillAdvancing;
+
+    if (!needsExpansion || expansion === MAX_DOMAIN_EXPANSIONS) {
+      return result;
+    }
+
+    domainMarginM *= DOMAIN_EXPANSION_FACTOR;
+  }
+
+  if (!lastResult) {
+    throw new Error("Downstream raster simulation produced no result.");
+  }
+
+  return lastResult;
 }

@@ -161,6 +161,7 @@ export async function createScene(container: string): Promise<SceneView> {
   let downstreamTraceStarted = false;
   let overtoppingPeakHeight = 0;
   let overtoppingPeakSourceT: number | null = null;
+  let overtoppingPeakWidthFraction = 0;
   let overtoppingPeakLastIncreaseAt = 0;
   let overtoppingEventActive = false;
   let lastBasinSeed: Point | null = null;
@@ -281,6 +282,7 @@ export async function createScene(container: string): Promise<SceneView> {
     downstreamTraceStarted = false;
     overtoppingPeakHeight = 0;
     overtoppingPeakSourceT = null;
+    overtoppingPeakWidthFraction = 0;
     overtoppingPeakLastIncreaseAt = 0;
     overtoppingEventActive = false;
     downstreamLayer.removeAll();
@@ -351,10 +353,14 @@ export async function createScene(container: string): Promise<SceneView> {
             overtoppingEventActive = true;
             overtoppingPeakHeight = state.maxWaveHeight;
             overtoppingPeakSourceT = state.sourceT;
+            overtoppingPeakWidthFraction =
+              state.overtoppingWidthFraction;
             overtoppingPeakLastIncreaseAt = now;
           } else if (state.maxWaveHeight > overtoppingPeakHeight + 0.002) {
             overtoppingPeakHeight = state.maxWaveHeight;
             overtoppingPeakSourceT = state.sourceT;
+            overtoppingPeakWidthFraction =
+              state.overtoppingWidthFraction;
             overtoppingPeakLastIncreaseAt = now;
           }
         }
@@ -374,8 +380,14 @@ export async function createScene(container: string): Promise<SceneView> {
             overtoppingPeakHeight - state.freeboard,
             0
           );
+          const measuredWidth = damBarrier
+            ? Math.hypot(
+                damBarrier.end.x - damBarrier.start.x,
+                damBarrier.end.y - damBarrier.start.y
+              ) * overtoppingPeakWidthFraction
+            : 0;
           downstream.textContent =
-            `Downstream: measuring overtopping peak — head ${measuredHead.toFixed(2)} m...`;
+            `Downstream: measuring overtopping peak — head ${measuredHead.toFixed(2)} m · crest width ${measuredWidth.toFixed(0)} m...`;
           downstream.dataset.state = "active";
         }
 
@@ -479,11 +491,15 @@ export async function createScene(container: string): Promise<SceneView> {
                     activeDam.end.x - activeDam.start.x,
                     activeDam.end.y - activeDam.start.y
                   );
+                  const measuredOverflowWidthM =
+                    overtoppingPeakWidthFraction > 0
+                      ? damLengthM * overtoppingPeakWidthFraction
+                      : undefined;
                   shallowWater = await simulateDownstreamShallowWater(
                     view,
                     flow,
                     overtoppingHead,
-                    damLengthM
+                    measuredOverflowWidthM
                   );
                   lastDownstreamRaster = shallowWater;
                   refreshDownstreamRaster();
@@ -531,6 +547,8 @@ export async function createScene(container: string): Promise<SceneView> {
                         sourceDepthM: shallowWater?.sourceDepthM ?? null,
                         peakDischargeM3s: shallowWater?.peakDischargeM3s ?? null,
                         effectiveOverflowWidthM: shallowWater?.effectiveOverflowWidthM ?? null,
+                        manningN: shallowWater?.manningN ?? null,
+                        hydrographDurationS: shallowWater?.hydrographDurationS ?? null,
                         inputVolumeM3: shallowWater?.inputVolumeM3 ?? null,
                         storedVolumeM3: shallowWater?.storedVolumeM3 ?? null,
                         outflowVolumeM3: shallowWater?.outflowVolumeM3 ?? null,
@@ -542,6 +560,8 @@ export async function createScene(container: string): Promise<SceneView> {
                         frontDistanceM: shallowWater?.frontDistanceM ?? null,
                         frontSpeedMs: shallowWater?.frontSpeedMs ?? null,
                         simulationBlocks: shallowWater?.simulationBlocks ?? null,
+                        domainExpansionCount: shallowWater?.domainExpansionCount ?? null,
+                        domainMarginM: shallowWater?.domainMarginM ?? null,
                         solverStopReason: shallowWater?.stopReason ?? null,
                         frontStillAdvancing: shallowWater?.frontStillAdvancing ?? null,
                         rasterCellSizeM: shallowWater?.cellSize ?? null
@@ -589,8 +609,28 @@ export async function createScene(container: string): Promise<SceneView> {
                               },
                               {
                                 fieldName: "effectiveOverflowWidthM",
-                                label: "Effective overflow width (m)",
+                                label: "Measured overflow width (m)",
                                 format: { digitSeparator: true, places: 1 }
+                              },
+                              {
+                                fieldName: "manningN",
+                                label: "Manning n",
+                                format: { digitSeparator: true, places: 3 }
+                              },
+                              {
+                                fieldName: "hydrographDurationS",
+                                label: "Hydrograph duration (s)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "domainExpansionCount",
+                                label: "Domain expansions",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "domainMarginM",
+                                label: "Final domain margin (m)",
+                                format: { digitSeparator: true, places: 0 }
                               },
                               {
                                 fieldName: "inputVolumeM3",
@@ -677,8 +717,11 @@ export async function createScene(container: string): Promise<SceneView> {
                     );
                   }
                   if (downstream) {
+                    const thinSheetFlow =
+                      shallowWater !== null &&
+                      shallowWater.peakDepthM <= 0.15;
                     downstream.textContent = shallowWater
-                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}.`
+                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · overflow ${shallowWater.effectiveOverflowWidthM.toFixed(0)} m · Manning ${shallowWater.manningN.toFixed(3)} · hydrograph ${shallowWater.hydrographDurationS.toFixed(0)} s · domain +${shallowWater.domainExpansionCount} (${shallowWater.domainMarginM.toFixed(0)} m) · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}${thinSheetFlow ? " · thin sheet flow (< 0.15 m peak); display extends to 0.01 m." : ""}.`
                       : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
                     downstream.dataset.state = shallowWater ? "active" : "error";
                   }
