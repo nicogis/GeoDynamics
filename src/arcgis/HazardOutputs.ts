@@ -106,7 +106,11 @@ export function buildHazardGeoJson(
         properties: {
           maxDepthM: depth,
           peakVelocityMs: velocity,
-          arrivalTimeS: result.arrivalTime[index],
+          arrivalTimeS:
+            result.arrivalTime[index] >= 0
+              ? result.arrivalTime[index]
+              : null,
+          thinSheet: result.arrivalTime[index] < 0,
           hazardIndex,
           hazardClass: classifyFloodHazard(hazardIndex),
           cellSizeM: result.cellSize
