@@ -1061,11 +1061,11 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
     let maxWaveHeight = 0;
     let sourceT: number | null = null;
-    let overtoppingMinT = Number.POSITIVE_INFINITY;
-    let overtoppingMaxT = Number.NEGATIVE_INFINITY;
-    let overtoppingSampleCount = 0;
+    let peakSampleIndex = -1;
+    const waveHeights = new Float32Array(this.damSamples.length);
 
-    for (const sample of this.damSamples) {
+    for (let sampleIndex = 0; sampleIndex < this.damSamples.length; sampleIndex += 1) {
+      const sample = this.damSamples[sampleIndex];
       const col = Math.min(
         Math.max(Math.floor(sample.u * WATER_TEXTURE_SIZE), 0),
         WATER_TEXTURE_SIZE - 1
@@ -1076,17 +1076,45 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       );
       const index = (row * WATER_TEXTURE_SIZE + col) * 4;
       const waveHeight = pixels[index] ?? 0;
+      waveHeights[sampleIndex] = waveHeight;
 
       if (waveHeight > maxWaveHeight) {
         maxWaveHeight = waveHeight;
         sourceT = sample.t;
+        peakSampleIndex = sampleIndex;
+      }
+    }
+
+    // Use only the contiguous overtopping segment that contains the peak.
+    // This avoids inflating the hydraulic source width when isolated crest
+    // samples or multiple disconnected wave lobes exceed freeboard.
+    let overtoppingStartIndex = -1;
+    let overtoppingEndIndex = -1;
+    let overtoppingSampleCount = 0;
+
+    if (
+      peakSampleIndex >= 0 &&
+      waveHeights[peakSampleIndex] > this.damFreeboard
+    ) {
+      overtoppingStartIndex = peakSampleIndex;
+      overtoppingEndIndex = peakSampleIndex;
+
+      while (
+        overtoppingStartIndex > 0 &&
+        waveHeights[overtoppingStartIndex - 1] > this.damFreeboard
+      ) {
+        overtoppingStartIndex -= 1;
       }
 
-      if (waveHeight > this.damFreeboard) {
-        overtoppingSampleCount += 1;
-        overtoppingMinT = Math.min(overtoppingMinT, sample.t);
-        overtoppingMaxT = Math.max(overtoppingMaxT, sample.t);
+      while (
+        overtoppingEndIndex < this.damSamples.length - 1 &&
+        waveHeights[overtoppingEndIndex + 1] > this.damFreeboard
+      ) {
+        overtoppingEndIndex += 1;
       }
+
+      overtoppingSampleCount =
+        overtoppingEndIndex - overtoppingStartIndex + 1;
     }
 
     const sampleSpacingFraction =
@@ -1094,14 +1122,10 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
         ? 1 / (this.damSamples.length - 1)
         : 1;
     const overtoppingWidthFraction =
-      overtoppingSampleCount > 0 &&
-      Number.isFinite(overtoppingMinT) &&
-      Number.isFinite(overtoppingMaxT)
+      overtoppingSampleCount > 0
         ? Math.min(
             Math.max(
-              overtoppingMaxT -
-                overtoppingMinT +
-                sampleSpacingFraction,
+              overtoppingSampleCount * sampleSpacingFraction,
               sampleSpacingFraction
             ),
             1
