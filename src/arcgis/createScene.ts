@@ -296,7 +296,8 @@ export async function createScene(container: string): Promise<SceneView> {
       view,
       seed,
       damBarrier,
-      settings
+      settings,
+      { trustSeedSide: source === "manual" }
     );
 
     if (requestId !== basinRequestId) {

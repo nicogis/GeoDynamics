@@ -42,6 +42,9 @@ interface BasinSample {
   touchesBoundary: boolean;
   areaM2: number;
   volumeM3: number;
+  nearDamContactCells: number;
+  nearDamMinT: number;
+  nearDamMaxT: number;
 }
 
 interface DamProfile {
@@ -418,12 +421,21 @@ export async function findAutomaticBasinSeed(
     }
 
     const offsetIndex = Math.floor(i / alongFractions.length);
+    const fractionIndex = i % alongFractions.length;
     const offset = offsets[offsetIndex] ?? offsets[offsets.length - 1];
+    const alongFraction =
+      alongFractions[fractionIndex] ?? 0.5;
 
-    // Prefer the nearest valid valley-floor point, with a small bias toward
-    // lower terrain so the seed lands inside the connected reservoir.
+    // Prefer a candidate close to the dam and close to the middle of the
+    // valley cross-section. A low terrain point still helps, but should not
+    // overpower the geometric signal and pull the seed into a side branch.
     const depth = waterElevation - elevation;
-    const score = offset - Math.min(depth, 50) * 0.5;
+    const centralityPenalty =
+      Math.abs(alongFraction - 0.5) * Math.max(length * 0.35, 80);
+    const score =
+      offset +
+      centralityPenalty -
+      Math.min(depth, 40) * 0.35;
 
     if (score < bestScore) {
       bestScore = score;
@@ -685,19 +697,55 @@ async function sampleConnectedMask(
     tryAdd(row, col - 1);
     tryAdd(row, col + 1);
 
-    // Diagonal connectivity avoids visually broken reservoirs when a narrow
-    // concave valley or one-cell saddle is represented diagonally in the DEM.
-    tryAdd(row - 1, col - 1);
-    tryAdd(row - 1, col + 1);
-    tryAdd(row + 1, col - 1);
-    tryAdd(row + 1, col + 1);
+    // Permit a diagonal only when at least one orthogonal bridge cell is
+    // itself a valid wet candidate. This preserves narrow diagonal valleys
+    // without allowing corner-only connections to jump across a ridge and
+    // select a rotated or spurious reservoir component.
+    const tryAddDiagonal = (
+      r: number,
+      c: number,
+      bridgeA: number,
+      bridgeB: number
+    ) => {
+      if (r < 0 || r >= resolution || c < 0 || c >= resolution) {
+        return;
+      }
+
+      if (
+        candidate[bridgeA] === 0 &&
+        candidate[bridgeB] === 0
+      ) {
+        return;
+      }
+
+      tryAdd(r, c);
+    };
+
+    const up = row > 0 ? (row - 1) * resolution + col : index;
+    const down =
+      row < resolution - 1 ? (row + 1) * resolution + col : index;
+    const left = col > 0 ? row * resolution + col - 1 : index;
+    const right =
+      col < resolution - 1 ? row * resolution + col + 1 : index;
+
+    tryAddDiagonal(row - 1, col - 1, up, left);
+    tryAddDiagonal(row - 1, col + 1, up, right);
+    tryAddDiagonal(row + 1, col - 1, down, left);
+    tryAddDiagonal(row + 1, col + 1, down, right);
   }
 
   let wetCellCount = 0;
   let volumeM3 = 0;
   let maxDepth = 0;
   let minWetDistanceToDam = Number.POSITIVE_INFINITY;
+  let nearDamContactCells = 0;
+  let nearDamMinT = Number.POSITIVE_INFINITY;
+  let nearDamMaxT = Number.NEGATIVE_INFINITY;
   const depth = new Float32Array(mask.length);
+  const damDx = dam.end.x - dam.start.x;
+  const damDy = dam.end.y - dam.start.y;
+  const damLengthSquared = damDx * damDx + damDy * damDy;
+  const nearDamTolerance = Math.max(step * 3, 35);
 
   for (let i = 0; i < mask.length; i += 1) {
     if (mask[i] === 0) {
@@ -711,14 +759,26 @@ async function sampleConnectedMask(
     const x = center.x - half + (col + 0.5) * step;
     const y = center.y - half + (row + 0.5) * step;
     const damSide = sideOfLine(x, y, dam);
-    const damDx = dam.end.x - dam.start.x;
-    const damDy = dam.end.y - dam.start.y;
-    const damLength = Math.hypot(damDx, damDy);
+    const damLength = Math.sqrt(damLengthSquared);
     if (damLength > 0) {
+      const distanceToDam = Math.abs(damSide) / damLength;
       minWetDistanceToDam = Math.min(
         minWetDistanceToDam,
-        Math.abs(damSide) / damLength
+        distanceToDam
       );
+
+      if (distanceToDam <= nearDamTolerance) {
+        const t =
+          ((x - dam.start.x) * damDx +
+            (y - dam.start.y) * damDy) /
+          damLengthSquared;
+
+        if (t >= -0.15 && t <= 1.15) {
+          nearDamContactCells += 1;
+          nearDamMinT = Math.min(nearDamMinT, t);
+          nearDamMaxT = Math.max(nearDamMaxT, t);
+        }
+      }
     }
 
     const terrainElevation = elevations[i];
@@ -737,13 +797,31 @@ async function sampleConnectedMask(
     );
   }
 
-  const nearDamTolerance = Math.max(step * 3, 35);
   if (
     !Number.isFinite(minWetDistanceToDam) ||
     minWetDistanceToDam > nearDamTolerance
   ) {
     throw new Error(
       "The selected water body is not connected to the dam. Choose a seed in the valley immediately upstream."
+    );
+  }
+
+  if (
+    nearDamContactCells < 2 ||
+    !Number.isFinite(nearDamMinT) ||
+    !Number.isFinite(nearDamMaxT)
+  ) {
+    throw new Error(
+      "The reservoir component does not make a stable contact with the dam profile."
+    );
+  }
+
+  // Reject components that only graze a remote dam extension. A valid
+  // reservoir should contact the actual barrier span, not wrap around an
+  // abutment or connect through a concave side branch.
+  if (nearDamMaxT < 0 || nearDamMinT > 1) {
+    throw new Error(
+      "The reservoir contacts the dam outside the barrier span. Reposition the dam or choose another upstream seed."
     );
   }
 
@@ -754,7 +832,10 @@ async function sampleConnectedMask(
     wetCellCount,
     touchesBoundary: touchesMaskBoundary(mask, resolution),
     areaM2: wetCellCount * cellArea,
-    volumeM3
+    volumeM3,
+    nearDamContactCells,
+    nearDamMinT,
+    nearDamMaxT
   };
 }
 
@@ -762,7 +843,8 @@ export async function sampleWaterBasin(
   view: SceneView,
   seed: Point,
   dam: DamBarrier,
-  settings: SimulationSettings
+  settings: SimulationSettings,
+  options: { trustSeedSide?: boolean } = {}
 ): Promise<SampledWaterBasin> {
   if (!seed.spatialReference.isWebMercator) {
     throw new Error("The current POC expects a Web Mercator SceneView.");
@@ -777,10 +859,13 @@ export async function sampleWaterBasin(
     throw new Error("The dam barrier is too short.");
   }
 
-  const upstreamSide = await estimateUpstreamSide(view, dam);
+  const upstreamSide = options.trustSeedSide
+    ? 0
+    : await estimateUpstreamSide(view, dam);
   const seedSide = Math.sign(sideOfLine(seed.x, seed.y, dam));
 
   if (
+    !options.trustSeedSide &&
     upstreamSide !== 0 &&
     seedSide !== 0 &&
     seedSide !== upstreamSide
@@ -809,12 +894,13 @@ export async function sampleWaterBasin(
     initialDomainSize(seed, dam),
     settings.maxBasinExtent
   );
-  const center = createSamplingCenter(seed, dam, size);
+  let center = createSamplingCenter(seed, dam, size);
   let resolution = resolutionForSize(size, settings);
   let sampled: BasinSample;
 
   while (true) {
     resolution = resolutionForSize(size, settings);
+    center = createSamplingCenter(seed, dam, size);
 
     sampled = await sampleConnectedMask(
       view,
