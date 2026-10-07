@@ -560,6 +560,8 @@ export async function createScene(container: string): Promise<SceneView> {
                         frontDistanceM: shallowWater?.frontDistanceM ?? null,
                         frontSpeedMs: shallowWater?.frontSpeedMs ?? null,
                         simulationBlocks: shallowWater?.simulationBlocks ?? null,
+                        domainExpansionCount: shallowWater?.domainExpansionCount ?? null,
+                        domainMarginM: shallowWater?.domainMarginM ?? null,
                         solverStopReason: shallowWater?.stopReason ?? null,
                         frontStillAdvancing: shallowWater?.frontStillAdvancing ?? null,
                         rasterCellSizeM: shallowWater?.cellSize ?? null
@@ -618,6 +620,16 @@ export async function createScene(container: string): Promise<SceneView> {
                               {
                                 fieldName: "hydrographDurationS",
                                 label: "Hydrograph duration (s)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "domainExpansionCount",
+                                label: "Domain expansions",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "domainMarginM",
+                                label: "Final domain margin (m)",
                                 format: { digitSeparator: true, places: 0 }
                               },
                               {
@@ -706,7 +718,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   }
                   if (downstream) {
                     downstream.textContent = shallowWater
-                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}.`
+                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · overflow ${shallowWater.effectiveOverflowWidthM.toFixed(0)} m · Manning ${shallowWater.manningN.toFixed(3)} · hydrograph ${shallowWater.hydrographDurationS.toFixed(0)} s · domain +${shallowWater.domainExpansionCount} (${shallowWater.domainMarginM.toFixed(0)} m) · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}.`
                       : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
                     downstream.dataset.state = shallowWater ? "active" : "error";
                   }
