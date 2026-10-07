@@ -32,6 +32,8 @@ export interface DownstreamShallowWaterResult {
   maxArrivalTimeS: number;
   simulatedDurationS: number;
   frontDistanceM: number;
+  frontSpeedMs: number;
+  simulationBlocks: number;
   stopReason:
     | "converged"
     | "duration-limit"
@@ -45,8 +47,9 @@ const MAX_RESOLUTION = 128;
 const DOMAIN_MARGIN_M = 220;
 const GRAVITY = 9.81;
 const MIN_SIMULATION_SECONDS = 120;
-const MAX_SIMULATION_SECONDS = 1800;
-const MAX_SIMULATION_STEPS = 2400;
+const SIMULATION_BLOCK_SECONDS = 600;
+const MAX_SIMULATION_SECONDS = 5400;
+const MAX_SIMULATION_STEPS = 7200;
 const CONVERGENCE_STEPS = 40;
 const DEPTH_CHANGE_TOLERANCE_M = 0.001;
 const WEIR_COEFFICIENT = 1.7;
@@ -234,6 +237,12 @@ export async function simulateDownstreamShallowWater(
   let stopReason: DownstreamShallowWaterResult["stopReason"] = "duration-limit";
   let stableSteps = 0;
   let frontStillAdvancing = false;
+  let currentFrontDistanceM = 0;
+  let frontSpeedMs = 0;
+  let blockStartFrontDistanceM = 0;
+  let blockStartTimeS = 0;
+  let nextBlockBoundaryS = SIMULATION_BLOCK_SECONDS;
+  let simulationBlocks = 1;
 
   for (let step = 0; step < MAX_SIMULATION_STEPS; step += 1) {
     const simulationTime = step * dtSeconds;
@@ -405,6 +414,15 @@ export async function simulateDownstreamShallowWater(
       if (value > MIN_WET_DEPTH_M && arrivalTime[i] < 0) {
         arrivalTime[i] = arrivalSampleTime;
         newWetCells += 1;
+
+        const wetRow = Math.floor(i / resolutionX);
+        const wetCol = i % resolutionX;
+        const wetX = minX + wetCol * cellSize;
+        const wetY = minY + wetRow * cellSize;
+        currentFrontDistanceM = Math.max(
+          currentFrontDistanceM,
+          Math.hypot(wetX - source[0], wetY - source[1])
+        );
       }
 
       totalDepthChange += Math.abs(value - previousValue);
@@ -440,6 +458,29 @@ export async function simulateDownstreamShallowWater(
       stopReason = "converged";
       frontStillAdvancing = false;
       break;
+    }
+
+    if (arrivalSampleTime >= nextBlockBoundaryS) {
+      const blockDurationS = Math.max(
+        arrivalSampleTime - blockStartTimeS,
+        dtSeconds
+      );
+      const blockAdvanceM = Math.max(
+        currentFrontDistanceM - blockStartFrontDistanceM,
+        0
+      );
+      frontSpeedMs = blockAdvanceM / blockDurationS;
+
+      blockStartFrontDistanceM = currentFrontDistanceM;
+      blockStartTimeS = arrivalSampleTime;
+      nextBlockBoundaryS += SIMULATION_BLOCK_SECONDS;
+      simulationBlocks += 1;
+
+      if (boundaryReached) {
+        stopReason = "domain-boundary-reached";
+        frontStillAdvancing = blockAdvanceM > cellSize * 0.25;
+        break;
+      }
     }
 
     if (step === MAX_SIMULATION_STEPS - 1) {
@@ -498,9 +539,24 @@ export async function simulateDownstreamShallowWater(
       ? Math.abs(balanceResidualM3) / inputVolumeM3 * 100
       : 0;
 
-  if (boundaryReached) {
+  if (boundaryReached && stopReason !== "domain-boundary-reached") {
     stopReason = "domain-boundary-reached";
   }
+
+  if (simulatedDurationS > blockStartTimeS) {
+    const tailDurationS = simulatedDurationS - blockStartTimeS;
+    const tailAdvanceM = Math.max(
+      frontDistanceM - blockStartFrontDistanceM,
+      0
+    );
+    if (tailDurationS > 0) {
+      frontSpeedMs = tailAdvanceM / tailDurationS;
+    }
+  }
+
+  frontStillAdvancing =
+    stopReason !== "converged" &&
+    frontSpeedMs > Math.max(cellSize / 600, 0.01);
 
   return {
     center: new Point({
@@ -535,6 +591,8 @@ export async function simulateDownstreamShallowWater(
     maxArrivalTimeS,
     simulatedDurationS,
     frontDistanceM,
+    frontSpeedMs,
+    simulationBlocks,
     stopReason,
     frontStillAdvancing
   };
