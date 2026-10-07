@@ -38,6 +38,8 @@ type WaterNodeInternal = RenderNode & {
         maxWaveHeight: number;
         freeboard: number;
         sourceT: number | null;
+        overtoppingWidthFraction: number;
+        overtoppingSampleCount: number;
       }) => void)
     | null;
   lastOvertoppingRead: number;
@@ -63,6 +65,8 @@ type WaterNodeInternal = RenderNode & {
         maxWaveHeight: number;
         freeboard: number;
         sourceT: number | null;
+        overtoppingWidthFraction: number;
+        overtoppingSampleCount: number;
       }
     ) => void
   ): void;
@@ -656,6 +660,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
         maxWaveHeight: number;
         freeboard: number;
         sourceT: number | null;
+        overtoppingWidthFraction: number;
+        overtoppingSampleCount: number;
       }
     ) => void
   ) {
@@ -1055,8 +1061,11 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
 
     let maxWaveHeight = 0;
     let sourceT: number | null = null;
+    let peakSampleIndex = -1;
+    const waveHeights = new Float32Array(this.damSamples.length);
 
-    for (const sample of this.damSamples) {
+    for (let sampleIndex = 0; sampleIndex < this.damSamples.length; sampleIndex += 1) {
+      const sample = this.damSamples[sampleIndex];
       const col = Math.min(
         Math.max(Math.floor(sample.u * WATER_TEXTURE_SIZE), 0),
         WATER_TEXTURE_SIZE - 1
@@ -1067,18 +1076,69 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       );
       const index = (row * WATER_TEXTURE_SIZE + col) * 4;
       const waveHeight = pixels[index] ?? 0;
+      waveHeights[sampleIndex] = waveHeight;
 
       if (waveHeight > maxWaveHeight) {
         maxWaveHeight = waveHeight;
         sourceT = sample.t;
+        peakSampleIndex = sampleIndex;
       }
     }
+
+    // Use only the contiguous overtopping segment that contains the peak.
+    // This avoids inflating the hydraulic source width when isolated crest
+    // samples or multiple disconnected wave lobes exceed freeboard.
+    let overtoppingStartIndex = -1;
+    let overtoppingEndIndex = -1;
+    let overtoppingSampleCount = 0;
+
+    if (
+      peakSampleIndex >= 0 &&
+      waveHeights[peakSampleIndex] > this.damFreeboard
+    ) {
+      overtoppingStartIndex = peakSampleIndex;
+      overtoppingEndIndex = peakSampleIndex;
+
+      while (
+        overtoppingStartIndex > 0 &&
+        waveHeights[overtoppingStartIndex - 1] > this.damFreeboard
+      ) {
+        overtoppingStartIndex -= 1;
+      }
+
+      while (
+        overtoppingEndIndex < this.damSamples.length - 1 &&
+        waveHeights[overtoppingEndIndex + 1] > this.damFreeboard
+      ) {
+        overtoppingEndIndex += 1;
+      }
+
+      overtoppingSampleCount =
+        overtoppingEndIndex - overtoppingStartIndex + 1;
+    }
+
+    const sampleSpacingFraction =
+      this.damSamples.length > 1
+        ? 1 / (this.damSamples.length - 1)
+        : 1;
+    const overtoppingWidthFraction =
+      overtoppingSampleCount > 0
+        ? Math.min(
+            Math.max(
+              overtoppingSampleCount * sampleSpacingFraction,
+              sampleSpacingFraction
+            ),
+            1
+          )
+        : 0;
 
     this.overtoppingCallback({
       overtopping: maxWaveHeight > this.damFreeboard,
       maxWaveHeight,
       freeboard: this.damFreeboard,
-      sourceT
+      sourceT,
+      overtoppingWidthFraction,
+      overtoppingSampleCount
     });
 
     this.resetWebGLState();

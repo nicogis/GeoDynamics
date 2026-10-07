@@ -14,7 +14,7 @@ export interface DownstreamRasterLegend {
   gradient: string;
 }
 
-const MIN_WET_DEPTH_M = 0.03;
+const DISPLAY_WET_DEPTH_M = 0.01;
 
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
@@ -66,7 +66,7 @@ function metricMaximum(
 ): number {
   switch (metric) {
     case "depth":
-      return Math.max(result.peakDepthM, MIN_WET_DEPTH_M);
+      return Math.max(result.peakDepthM, DISPLAY_WET_DEPTH_M);
     case "velocity":
       return Math.max(result.peakVelocityMs, 0.1);
     case "arrival":
@@ -108,7 +108,7 @@ function isRenderableCell(
   metric: Exclude<DownstreamRasterMetric, "off">,
   index: number
 ): boolean {
-  if (result.maxDepth[index] <= MIN_WET_DEPTH_M) {
+  if (result.maxDepth[index] <= DISPLAY_WET_DEPTH_M) {
     return false;
   }
 
@@ -226,7 +226,7 @@ export function getDownstreamRasterLegend(
     case "depth":
       return {
         title: "Max depth",
-        minLabel: "0.03 m",
+        minLabel: "0.01 m",
         maxLabel: `${result.peakDepthM.toFixed(2)} m`,
         gradient: "linear-gradient(90deg, rgb(145,235,255), rgb(25,145,225), rgb(5,45,120))"
       };
