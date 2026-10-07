@@ -24,7 +24,15 @@ import {
   buildDownstreamInundationSurface,
   traceDownstreamFlow
 } from "../physics/DownstreamInundation";
-import { simulateDownstreamShallowWater } from "../physics/DownstreamShallowWater";
+import {
+  simulateDownstreamShallowWater,
+  type DownstreamShallowWaterResult
+} from "../physics/DownstreamShallowWater";
+import {
+  getDownstreamRasterLegend,
+  renderDownstreamRaster,
+  type DownstreamRasterMetric
+} from "./DownstreamRasterVisualization";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -69,6 +77,13 @@ export async function createScene(container: string): Promise<SceneView> {
     }
   });
 
+  const downstreamRasterLayer = new GraphicsLayer({
+    title: "Downstream hydraulic raster",
+    elevationInfo: {
+      mode: "on-the-ground"
+    }
+  });
+
   const map = new Map({
     basemap: "satellite",
     ground: "world-elevation",
@@ -78,7 +93,8 @@ export async function createScene(container: string): Promise<SceneView> {
       damGroundPreviewLayer,
       damFaceLayer,
       damLayer,
-      downstreamLayer
+      downstreamLayer,
+      downstreamRasterLayer
     ]
   });
 
@@ -112,6 +128,15 @@ export async function createScene(container: string): Promise<SceneView> {
   const help = document.querySelector<HTMLDivElement>("#help");
   const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
   const downstream = document.querySelector<HTMLDivElement>("#downstream");
+  const downstreamRasterMetric = document.querySelector<HTMLSelectElement>(
+    "#downstreamRasterMetric"
+  );
+  const downstreamRasterOpacity = document.querySelector<HTMLInputElement>(
+    "#downstreamRasterOpacity"
+  );
+  const downstreamLegend = document.querySelector<HTMLDivElement>(
+    "#downstreamLegend"
+  );
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -139,12 +164,104 @@ export async function createScene(container: string): Promise<SceneView> {
   let lastBasinSeed: Point | null = null;
   let lastBasinSource: "automatic" | "manual" | null = null;
   let basinRegenerationTimer: number | null = null;
+  let lastDownstreamRaster: DownstreamShallowWaterResult | null = null;
+  let rasterMetric: DownstreamRasterMetric = "depth";
+  let rasterOpacity = 0.65;
 
   const writeHelp = (message: string) => {
     if (help) {
       help.textContent = message;
     }
   };
+
+
+  const refreshDownstreamPresentation = () => {
+    const rasterActive =
+      rasterMetric !== "off" && lastDownstreamRaster !== null;
+
+    for (const graphic of downstreamLayer.graphics.toArray()) {
+      const geometryType = graphic.geometry?.type;
+
+      if (geometryType === "polyline") {
+        graphic.symbol = new SimpleLineSymbol({
+          color: rasterActive
+            ? [0, 225, 255, 0.55]
+            : [0, 225, 255, 0.95],
+          width: rasterActive ? 1.25 : 4
+        });
+        graphic.visible = true;
+      } else if (geometryType === "polygon") {
+        graphic.visible = !rasterActive;
+        if (!rasterActive) {
+          graphic.symbol = new PolygonSymbol3D({
+            symbolLayers: [
+              new FillSymbol3DLayer({
+                material: {
+                  color: [0, 170, 235, 0.46]
+                },
+                outline: {
+                  color: [70, 220, 255, 0.95],
+                  size: 1.5
+                }
+              })
+            ]
+          });
+        }
+      }
+    }
+  };
+
+  const refreshDownstreamRaster = () => {
+    renderDownstreamRaster(
+      downstreamRasterLayer,
+      lastDownstreamRaster,
+      rasterMetric,
+      rasterOpacity
+    );
+    refreshDownstreamPresentation();
+
+    if (!downstreamLegend) {
+      return;
+    }
+
+    const legend = getDownstreamRasterLegend(
+      lastDownstreamRaster,
+      rasterMetric
+    );
+
+    if (!legend) {
+      downstreamLegend.dataset.visible = "false";
+      downstreamLegend.innerHTML = "";
+      return;
+    }
+
+    downstreamLegend.dataset.visible = "true";
+    downstreamLegend.innerHTML =
+      `<strong>${legend.title}</strong>` +
+      `<div class="raster-legend-bar" style="background:${legend.gradient}"></div>` +
+      `<div class="raster-legend-labels"><span>${legend.minLabel}</span><span>${legend.maxLabel}</span></div>`;
+  };
+
+  if (downstreamRasterMetric) {
+    downstreamRasterMetric.value = rasterMetric;
+    downstreamRasterMetric.addEventListener("change", () => {
+      rasterMetric =
+        downstreamRasterMetric.value as DownstreamRasterMetric;
+      refreshDownstreamRaster();
+    });
+  }
+
+  if (downstreamRasterOpacity) {
+    downstreamRasterOpacity.value = String(rasterOpacity);
+    downstreamRasterOpacity.addEventListener("change", () => {
+      const parsed = Number(downstreamRasterOpacity.value);
+      rasterOpacity = Number.isFinite(parsed)
+        ? Math.min(Math.max(parsed, 0.1), 1)
+        : 0.65;
+      downstreamRasterOpacity.value = String(rasterOpacity);
+      refreshDownstreamRaster();
+    });
+  }
 
   const applyBasin = async (
     seed: Point,
@@ -165,6 +282,9 @@ export async function createScene(container: string): Promise<SceneView> {
     overtoppingPeakLastIncreaseAt = 0;
     overtoppingEventActive = false;
     downstreamLayer.removeAll();
+    downstreamRasterLayer.removeAll();
+    lastDownstreamRaster = null;
+    refreshDownstreamRaster();
     view.closePopup();
     writeStatus(
       source === "automatic"
@@ -309,6 +429,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   }
                 })
               );
+              refreshDownstreamPresentation();
 
               if (downstream) {
                 downstream.textContent = `Downstream: path traced — ${flow.lengthM.toFixed(0)} m. Building inundation surface...`;
@@ -341,11 +462,25 @@ export async function createScene(container: string): Promise<SceneView> {
                   | null = null;
 
                 try {
+                  const activeDam = damBarrier;
+                  if (!activeDam) {
+                    throw new Error(
+                      "Dam barrier is no longer available for downstream simulation."
+                    );
+                  }
+
+                  const damLengthM = Math.hypot(
+                    activeDam.end.x - activeDam.start.x,
+                    activeDam.end.y - activeDam.start.y
+                  );
                   shallowWater = await simulateDownstreamShallowWater(
                     view,
                     flow,
-                    overtoppingHead
+                    overtoppingHead,
+                    damLengthM
                   );
+                  lastDownstreamRaster = shallowWater;
+                  refreshDownstreamRaster();
                 } catch (solverError: unknown) {
                   console.warn(
                     "Downstream shallow-water raster simulation failed:",
@@ -388,9 +523,21 @@ export async function createScene(container: string): Promise<SceneView> {
                         rasterWetAreaM2: shallowWater?.wetAreaM2 ?? null,
                         solverOvertoppingHeadM: shallowWater?.overtoppingHeadM ?? null,
                         sourceDepthM: shallowWater?.sourceDepthM ?? null,
+                        peakDischargeM3s: shallowWater?.peakDischargeM3s ?? null,
+                        effectiveOverflowWidthM: shallowWater?.effectiveOverflowWidthM ?? null,
+                        inputVolumeM3: shallowWater?.inputVolumeM3 ?? null,
+                        storedVolumeM3: shallowWater?.storedVolumeM3 ?? null,
+                        outflowVolumeM3: shallowWater?.outflowVolumeM3 ?? null,
+                        massBalanceErrorPct: shallowWater?.massBalanceErrorPct ?? null,
                         peakDepthM: shallowWater?.peakDepthM ?? null,
                         peakVelocityMs: shallowWater?.peakVelocityMs ?? null,
                         maxArrivalTimeS: shallowWater?.maxArrivalTimeS ?? null,
+                        simulatedDurationS: shallowWater?.simulatedDurationS ?? null,
+                        frontDistanceM: shallowWater?.frontDistanceM ?? null,
+                        frontSpeedMs: shallowWater?.frontSpeedMs ?? null,
+                        simulationBlocks: shallowWater?.simulationBlocks ?? null,
+                        solverStopReason: shallowWater?.stopReason ?? null,
+                        frontStillAdvancing: shallowWater?.frontStillAdvancing ?? null,
                         rasterCellSizeM: shallowWater?.cellSize ?? null
                       },
                       popupTemplate: {
@@ -430,6 +577,36 @@ export async function createScene(container: string): Promise<SceneView> {
                                 format: { digitSeparator: true, places: 2 }
                               },
                               {
+                                fieldName: "peakDischargeM3s",
+                                label: "Peak discharge (m³/s)",
+                                format: { digitSeparator: true, places: 1 }
+                              },
+                              {
+                                fieldName: "effectiveOverflowWidthM",
+                                label: "Effective overflow width (m)",
+                                format: { digitSeparator: true, places: 1 }
+                              },
+                              {
+                                fieldName: "inputVolumeM3",
+                                label: "Input volume (m³)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "storedVolumeM3",
+                                label: "Stored volume (m³)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "outflowVolumeM3",
+                                label: "Outflow volume (m³)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "massBalanceErrorPct",
+                                label: "Mass balance error (%)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
                                 fieldName: "peakDepthM",
                                 label: "Max downstream depth (m)",
                                 format: { digitSeparator: true, places: 2 }
@@ -445,6 +622,33 @@ export async function createScene(container: string): Promise<SceneView> {
                                 format: { digitSeparator: true, places: 1 }
                               },
                               {
+                                fieldName: "simulatedDurationS",
+                                label: "Simulated duration (s)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "frontDistanceM",
+                                label: "Front distance (m)",
+                                format: { digitSeparator: true, places: 0 }
+                              },
+                              {
+                                fieldName: "frontSpeedMs",
+                                label: "Front speed (m/s)",
+                                format: { digitSeparator: true, places: 2 }
+                              },
+                              {
+                                fieldName: "simulationBlocks",
+                                label: "Simulation blocks"
+                              },
+                              {
+                                fieldName: "solverStopReason",
+                                label: "Solver stop reason"
+                              },
+                              {
+                                fieldName: "frontStillAdvancing",
+                                label: "Front still advancing"
+                              },
+                              {
                                 fieldName: "rasterCellSizeM",
                                 label: "Raster cell size (m)",
                                 format: { digitSeparator: true, places: 1 }
@@ -455,10 +659,11 @@ export async function createScene(container: string): Promise<SceneView> {
                       }
                     })
                   );
+                  refreshDownstreamPresentation();
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · source depth ${shallowWater.sourceDepthM.toFixed(2)} m · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(2)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s / ${shallowWater.simulationBlocks} blocks · front ${shallowWater.frontDistanceM.toFixed(0)} m @ ${shallowWater.frontSpeedMs.toFixed(2)} m/s · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
@@ -467,7 +672,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   }
                   if (downstream) {
                     downstream.textContent = shallowWater
-                      ? `Downstream: raster foundation ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha.`
+                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}.`
                       : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
                     downstream.dataset.state = shallowWater ? "active" : "error";
                   }
@@ -879,6 +1084,9 @@ export async function createScene(container: string): Promise<SceneView> {
           damFaceLayer.removeAll();
           downstreamTraceGeneration += 1;
           downstreamLayer.removeAll();
+          downstreamRasterLayer.removeAll();
+          lastDownstreamRaster = null;
+          refreshDownstreamRaster();
           downstreamTraceStarted = false;
           overtoppingPeakHeight = 0;
           overtoppingPeakSourceT = null;
@@ -1015,6 +1223,9 @@ export async function createScene(container: string): Promise<SceneView> {
       resultLayer.removeAll();
       downstreamTraceGeneration += 1;
       downstreamLayer.removeAll();
+      downstreamRasterLayer.removeAll();
+      lastDownstreamRaster = null;
+      refreshDownstreamRaster();
       trajectoryGraphic = null;
       downstreamTraceStarted = false;
       overtoppingPeakHeight = 0;
