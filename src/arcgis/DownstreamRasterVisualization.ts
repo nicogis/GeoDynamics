@@ -204,7 +204,11 @@ export function renderDownstreamRaster(
           attributes: {
             maxDepthM: result.maxDepth[index],
             peakVelocityMs: result.maxVelocity[index],
-            arrivalTimeS: result.arrivalTime[index],
+            arrivalTimeS:
+              result.arrivalTime[index] >= 0
+                ? result.arrivalTime[index]
+                : null,
+            thinSheet: result.arrivalTime[index] < 0,
             hazardIndex,
             hazardClass,
             cellSizeM: result.cellSize
@@ -229,6 +233,10 @@ export function renderDownstreamRaster(
                     fieldName: "arrivalTimeS",
                     label: "Arrival time (s)",
                     format: { digitSeparator: true, places: 1 }
+                  },
+                  {
+                    fieldName: "thinSheet",
+                    label: "Thin sheet"
                   },
                   {
                     fieldName: "hazardIndex",
