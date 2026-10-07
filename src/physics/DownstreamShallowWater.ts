@@ -36,6 +36,8 @@ export interface DownstreamShallowWaterResult {
   frontDistanceM: number;
   frontSpeedMs: number;
   simulationBlocks: number;
+  domainExpansionCount: number;
+  domainMarginM: number;
   stopReason:
     | "converged"
     | "duration-limit"
@@ -47,6 +49,9 @@ export interface DownstreamShallowWaterResult {
 const TARGET_CELL_SIZE_M = 20;
 const MAX_RESOLUTION = 128;
 const DOMAIN_MARGIN_M = 220;
+const DOMAIN_EXPANSION_FACTOR = 1.5;
+const MAX_DOMAIN_EXPANSIONS = 3;
+const MAX_ADAPTIVE_RESOLUTION = 256;
 const GRAVITY = 9.81;
 const MIN_SIMULATION_SECONDS = 120;
 const SIMULATION_BLOCK_SECONDS = 600;
@@ -98,11 +103,13 @@ function indexOf(row: number, col: number, width: number): number {
   return row * width + col;
 }
 
-export async function simulateDownstreamShallowWater(
+async function simulateDownstreamShallowWaterAttempt(
   view: SceneView,
   flow: DownstreamFlowPath,
   overtoppingHeadM: number,
-  measuredOverflowWidthM?: number
+  measuredOverflowWidthM: number | undefined,
+  domainMarginM: number,
+  maxResolution: number
 ): Promise<DownstreamShallowWaterResult> {
   if (flow.points.length < 2) {
     throw new Error("Downstream flow path is too short for raster simulation.");
@@ -110,16 +117,16 @@ export async function simulateDownstreamShallowWater(
 
   const xs = flow.points.map((point) => point[0]);
   const ys = flow.points.map((point) => point[1]);
-  const minX = Math.min(...xs) - DOMAIN_MARGIN_M;
-  const maxX = Math.max(...xs) + DOMAIN_MARGIN_M;
-  const minY = Math.min(...ys) - DOMAIN_MARGIN_M;
-  const maxY = Math.max(...ys) + DOMAIN_MARGIN_M;
+  const minX = Math.min(...xs) - domainMarginM;
+  const maxX = Math.max(...xs) + domainMarginM;
+  const minY = Math.min(...ys) - domainMarginM;
+  const maxY = Math.max(...ys) + domainMarginM;
   const width = Math.max(maxX - minX, TARGET_CELL_SIZE_M * 8);
   const height = Math.max(maxY - minY, TARGET_CELL_SIZE_M * 8);
 
   const scale = Math.max(
-    width / (MAX_RESOLUTION - 1),
-    height / (MAX_RESOLUTION - 1),
+    width / (maxResolution - 1),
+    height / (maxResolution - 1),
     TARGET_CELL_SIZE_M
   );
   const resolutionX = Math.max(8, Math.ceil(width / scale) + 1);
@@ -638,7 +645,67 @@ export async function simulateDownstreamShallowWater(
     frontDistanceM,
     frontSpeedMs,
     simulationBlocks,
+    domainExpansionCount: 0,
+    domainMarginM,
     stopReason,
     frontStillAdvancing
   };
+}
+
+
+export async function simulateDownstreamShallowWater(
+  view: SceneView,
+  flow: DownstreamFlowPath,
+  overtoppingHeadM: number,
+  measuredOverflowWidthM?: number
+): Promise<DownstreamShallowWaterResult> {
+  let domainMarginM = DOMAIN_MARGIN_M;
+  let lastResult: DownstreamShallowWaterResult | null = null;
+
+  for (
+    let expansion = 0;
+    expansion <= MAX_DOMAIN_EXPANSIONS;
+    expansion += 1
+  ) {
+    const resolutionScale = Math.pow(
+      DOMAIN_EXPANSION_FACTOR,
+      expansion
+    );
+    const maxResolution = Math.min(
+      Math.max(
+        MAX_RESOLUTION,
+        Math.round(MAX_RESOLUTION * resolutionScale)
+      ),
+      MAX_ADAPTIVE_RESOLUTION
+    );
+
+    const result = await simulateDownstreamShallowWaterAttempt(
+      view,
+      flow,
+      overtoppingHeadM,
+      measuredOverflowWidthM,
+      domainMarginM,
+      maxResolution
+    );
+
+    result.domainExpansionCount = expansion;
+    result.domainMarginM = domainMarginM;
+    lastResult = result;
+
+    const needsExpansion =
+      result.stopReason === "domain-boundary-reached" &&
+      result.frontStillAdvancing;
+
+    if (!needsExpansion || expansion === MAX_DOMAIN_EXPANSIONS) {
+      return result;
+    }
+
+    domainMarginM *= DOMAIN_EXPANSION_FACTOR;
+  }
+
+  if (!lastResult) {
+    throw new Error("Downstream raster simulation produced no result.");
+  }
+
+  return lastResult;
 }
