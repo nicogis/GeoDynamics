@@ -717,8 +717,11 @@ export async function createScene(container: string): Promise<SceneView> {
                     );
                   }
                   if (downstream) {
+                    const thinSheetFlow =
+                      shallowWater !== null &&
+                      shallowWater.peakDepthM <= 0.15;
                     downstream.textContent = shallowWater
-                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · overflow ${shallowWater.effectiveOverflowWidthM.toFixed(0)} m · Manning ${shallowWater.manningN.toFixed(3)} · hydrograph ${shallowWater.hydrographDurationS.toFixed(0)} s · domain +${shallowWater.domainExpansionCount} (${shallowWater.domainMarginM.toFixed(0)} m) · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}.`
+                      ? `Downstream: raster ready — ${shallowWater.resolutionX}×${shallowWater.resolutionY} · wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · overflow ${shallowWater.effectiveOverflowWidthM.toFixed(0)} m · Manning ${shallowWater.manningN.toFixed(3)} · hydrograph ${shallowWater.hydrographDurationS.toFixed(0)} s · domain +${shallowWater.domainExpansionCount} (${shallowWater.domainMarginM.toFixed(0)} m) · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " / front advancing" : ""}${thinSheetFlow ? " · thin sheet flow (< 0.15 m peak); display extends to 0.01 m." : ""}.`
                       : `Downstream: surface ready — ${(surface.areaM2 / 10_000).toFixed(2)} ha · raster solver failed.`;
                     downstream.dataset.state = shallowWater ? "active" : "error";
                   }
