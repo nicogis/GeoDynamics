@@ -10,6 +10,7 @@
   },
   "include": [
     "src/physics/ReservoirTopology.ts",
-    "src/physics/DownstreamSolverCore.ts"
+    "src/physics/DownstreamSolverCore.ts",
+    "src/physics/ShallowWater2D.ts"
   ]
 }
