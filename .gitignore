@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Visual Studio
 .vs/
+
+# Local synthetic test build
+.test-dist/
