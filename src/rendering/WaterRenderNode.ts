@@ -1235,7 +1235,20 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     if (!transform) {
       return output;
     }
-    this.waterTransform = new Float64Array(transform);
+
+    const transformChanged =
+      !this.waterTransform ||
+      transform.some(
+        (value, index) =>
+          Math.abs(value - (this.waterTransform?.[index] ?? Number.NaN)) > 1e-6
+      );
+
+    if (transformChanged) {
+      this.waterTransform = new Float64Array(transform);
+      if (this.initializedResources) {
+        this.rebuildMesh();
+      }
+    }
 
     this.ensureResources();
     this.runImpactPass();
