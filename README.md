@@ -4,7 +4,7 @@
 
 **Release target:** GeoDynamics 1.0.0
 
-**Live demo:** GitHub Pages deployment is included in the release workflow and will be available at `https://nicogis.github.io/GeoDynamics/` once Pages is enabled for GitHub Actions.
+**Live demo:** https://nicogis.github.io/GeoDynamics/
 
 
 GeoDynamics explores how a GIS can become an interactive simulation environment by combining ArcGIS Maps SDK for JavaScript with terrain sampling, custom WebGL2 rendering, rigid-body physics, reduced-order and experimental 2D shallow-water hydraulics, reproducible scenario persistence and GIS-native analysis outputs.
