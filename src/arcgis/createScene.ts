@@ -841,7 +841,8 @@ export async function createScene(container: string): Promise<SceneView> {
       ring.push(ring[0]);
 
       damFaceLayer.removeAll();
-      damFaceLayer.add(
+
+      const damGraphics: Graphic[] = [
         new Graphic({
           geometry: new Polygon({
             spatialReference: view.spatialReference,
@@ -851,13 +852,49 @@ export async function createScene(container: string): Promise<SceneView> {
             symbolLayers: [
               new FillSymbol3DLayer({
                 material: {
-                  color: [120, 105, 90, 0.88]
+                  color: [118, 116, 111, 0.96]
+                },
+                outline: {
+                  color: [70, 72, 72, 0.9],
+                  size: 0.8
                 }
               })
             ]
           })
         })
+      ];
+
+      // Keep the face single-surface. Coplanar wet-band polygons and a second
+      // crest polyline caused visible z-fighting against the dam body and the
+      // interactive orange crest. The existing water-level line communicates
+      // wetting without introducing overlapping geometry.
+
+      // Subtle vertical construction joints provide scale and a concrete-panel
+      // appearance while keeping the dam geometry tied to the sampled terrain.
+      const jointStep = Math.max(
+        4,
+        Math.floor(profile.length / 10)
       );
+      for (let i = jointStep; i < profile.length - 1; i += jointStep) {
+        const p = profile[i];
+        damGraphics.push(
+          new Graphic({
+            geometry: new Polyline({
+              spatialReference: view.spatialReference,
+              paths: [[
+                [p[0], p[1], p[2] + 0.05],
+                [p[0], p[1], crestElevation - 0.05]
+              ]]
+            }),
+            symbol: new SimpleLineSymbol({
+              color: [72, 74, 73, 0.42],
+              width: 1
+            })
+          })
+        );
+      }
+
+      damFaceLayer.addMany(damGraphics);
 
       const waterLevelLine = new Polyline({
         spatialReference: view.spatialReference,
