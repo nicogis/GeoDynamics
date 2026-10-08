@@ -8,5 +8,8 @@
     "rootDir": ".",
     "outDir": ".test-dist"
   },
-  "include": ["src/physics/ReservoirTopology.ts"]
+  "include": [
+    "src/physics/ReservoirTopology.ts",
+    "src/physics/DownstreamSolverCore.ts"
+  ]
 }
