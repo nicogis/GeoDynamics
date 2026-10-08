@@ -7,6 +7,8 @@ import {
   advanceConservativeFlowStep,
   auditMassBalance,
   drainOutletBoundary,
+  expectedTriangularHydrographVolumeM3,
+  triangularHydrographFactor,
   type ConservativeFlowStepOptions,
   type OutletEdge
 } from "./DownstreamSolverCore";
@@ -35,7 +37,10 @@ export interface DownstreamShallowWaterResult {
   inputVolumeM3: number;
   storedVolumeM3: number;
   outflowVolumeM3: number;
+  massBalanceResidualM3: number;
   massBalanceErrorPct: number;
+  expectedHydrographVolumeM3: number;
+  hydrographVolumeErrorPct: number;
   peakDepthM: number;
   peakVelocityMs: number;
   maxArrivalTimeS: number;
@@ -286,11 +291,10 @@ async function simulateDownstreamShallowWaterAttempt(
     // a broad-crested weir approximation so the injected water volume is
     // explicit and auditable rather than imposed as a persistent depth.
     if (simulationTime <= sourcePulseSeconds && peakDischargeM3s > 0) {
-      const phase = simulationTime / Math.max(sourcePulseSeconds, 1);
-      const hydrographFactor =
-        phase <= 0.35
-          ? phase / 0.35
-          : Math.max(1 - (phase - 0.35) / 0.65, 0);
+      const hydrographFactor = triangularHydrographFactor(
+        simulationTime,
+        sourcePulseSeconds
+      );
       const dischargeM3s = peakDischargeM3s * hydrographFactor;
       const injectedVolumeM3 = dischargeM3s * dtSeconds;
       const injectedDepth =
@@ -469,7 +473,19 @@ async function simulateDownstreamShallowWaterAttempt(
     cellAreaM2
   );
   const storedVolumeM3 = massAudit.storedVolumeM3;
+  const massBalanceResidualM3 = massAudit.residualVolumeM3;
   const massBalanceErrorPct = massAudit.errorPct;
+  const expectedHydrographVolumeM3 =
+    expectedTriangularHydrographVolumeM3(
+      peakDischargeM3s,
+      sourcePulseSeconds
+    );
+  const hydrographVolumeErrorPct =
+    expectedHydrographVolumeM3 > 0
+      ? Math.abs(
+          inputVolumeM3 - expectedHydrographVolumeM3
+        ) / expectedHydrographVolumeM3 * 100
+      : 0;
 
   if (boundaryReached && stopReason !== "domain-boundary-reached") {
     stopReason = "domain-boundary-reached";
@@ -519,7 +535,10 @@ async function simulateDownstreamShallowWaterAttempt(
     inputVolumeM3,
     storedVolumeM3,
     outflowVolumeM3,
+    massBalanceResidualM3,
     massBalanceErrorPct,
+    expectedHydrographVolumeM3,
+    hydrographVolumeErrorPct,
     peakDepthM,
     peakVelocityMs,
     maxArrivalTimeS,
