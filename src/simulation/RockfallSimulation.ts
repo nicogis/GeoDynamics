@@ -141,6 +141,7 @@ export class RockfallSimulation {
         }
       : null;
 
+    this.rockNode.setRadius(runSettings.rockRadius);
     this.writeStatus("Sampling ArcGIS terrain around the release point...");
 
     await this.rapierReady;
@@ -401,7 +402,7 @@ export class RockfallSimulation {
       return;
     }
 
-    const rockBottom = (point.z ?? 0) - runSettings.rockRadius;
+    const rockBottom = (point.z ?? 0) - this.currentSettings.rockRadius;
     const submergedDepth = surface.elevation - rockBottom;
     const inWater = this.water.containsPoint(point) && submergedDepth > 0;
 
@@ -414,7 +415,7 @@ export class RockfallSimulation {
 
     if (inWater) {
       const immersion = Math.min(
-        Math.max(submergedDepth / (runSettings.rockRadius * 2), 0),
+        Math.max(submergedDepth / (this.currentSettings.rockRadius * 2), 0),
         1
       );
 
@@ -439,7 +440,7 @@ export class RockfallSimulation {
       const buoyancyForce =
         mass *
         9.81 *
-        (WATER_DENSITY / runSettings.rockDensity) *
+        (WATER_DENSITY / this.currentSettings.rockDensity) *
         immersion;
 
       this.body.addForce({ x: 0, y: buoyancyForce, z: 0 }, true);
@@ -484,8 +485,8 @@ export class RockfallSimulation {
       return;
     }
 
-    const rockVolume = (4 / 3) * Math.PI * runSettings.rockRadius ** 3;
-    const rockMassKg = rockVolume * runSettings.rockDensity;
+    const rockVolume = (4 / 3) * Math.PI * this.currentSettings.rockRadius ** 3;
+    const rockMassKg = rockVolume * this.currentSettings.rockDensity;
     const peakKineticEnergyJ = 0.5 * rockMassKg * this.maxSpeed ** 2;
     const elevationDrop = (this.origin.z ?? 0) - (point.z ?? 0);
 
