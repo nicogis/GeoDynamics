@@ -157,3 +157,124 @@ test("wet/dry state remains finite and non-negative", () => {
   const validation = validateSwe2DState(state);
   assert.equal(validation.valid, true, validation.reason);
 });
+
+
+test("lake at rest remains well-balanced over variable topography", () => {
+  const nx = 72;
+  const ny = 48;
+  const dx = 5;
+  const dy = 5;
+  const bed = new Float64Array(nx * ny);
+  const state = createSwe2DState(nx * ny);
+  const freeSurface = 12;
+
+  for (let row = 0; row < ny; row += 1) {
+    for (let col = 0; col < nx; col += 1) {
+      const x = (col - nx / 2) * dx;
+      const y = (row - ny / 2) * dy;
+      const z =
+        2.2 +
+        0.008 * x +
+        0.004 * y +
+        0.75 * Math.exp(-(x * x + y * y) / 9000);
+      const i = row * nx + col;
+      bed[i] = z;
+      state.h[i] = Math.max(freeSurface - z, 0);
+    }
+  }
+
+  const grid = { nx, ny, dx, dy, bed };
+  const initialVolume = computeSwe2DVolumeM3(state, grid);
+  let maxMomentum = 0;
+
+  for (let step = 0; step < 500; step += 1) {
+    const diagnostics = advanceSwe2D(state, grid, {
+      cfl: 0.35,
+      dryDepth: 1e-6,
+      manningN: 0
+    });
+    assert.equal(diagnostics.clippedNegativeDepthCells, 0);
+  }
+
+  let maxSurfaceError = 0;
+  for (let i = 0; i < state.h.length; i += 1) {
+    maxMomentum = Math.max(
+      maxMomentum,
+      Math.abs(state.hu[i]),
+      Math.abs(state.hv[i])
+    );
+    maxSurfaceError = Math.max(
+      maxSurfaceError,
+      Math.abs(state.h[i] + bed[i] - freeSurface)
+    );
+  }
+
+  const finalVolume = computeSwe2DVolumeM3(state, grid);
+  const volumeError =
+    Math.abs(finalVolume - initialVolume) / initialVolume;
+
+  assert.ok(
+    maxMomentum < 1e-9,
+    `spurious momentum too large: ${maxMomentum}`
+  );
+  assert.ok(
+    maxSurfaceError < 1e-9,
+    `free-surface drift too large: ${maxSurfaceError}`
+  );
+  assert.ok(
+    volumeError < 1e-12,
+    `well-balanced volume drift too large: ${volumeError}`
+  );
+});
+
+test("partially dry lake at rest remains stable over a bed hump", () => {
+  const nx = 64;
+  const ny = 40;
+  const dx = 4;
+  const dy = 4;
+  const bed = new Float64Array(nx * ny);
+  const state = createSwe2DState(nx * ny);
+  const freeSurface = 3.2;
+
+  for (let row = 0; row < ny; row += 1) {
+    for (let col = 0; col < nx; col += 1) {
+      const x = (col - nx / 2) * dx;
+      const y = (row - ny / 2) * dy;
+      const z =
+        1.5 +
+        2.2 * Math.exp(-(x * x + y * y) / 1800);
+      const i = row * nx + col;
+      bed[i] = z;
+      state.h[i] = Math.max(freeSurface - z, 0);
+    }
+  }
+
+  const grid = { nx, ny, dx, dy, bed };
+  const initialVolume = computeSwe2DVolumeM3(state, grid);
+
+  for (let step = 0; step < 300; step += 1) {
+    advanceSwe2D(state, grid, {
+      cfl: 0.25,
+      dryDepth: 1e-5,
+      manningN: 0
+    });
+  }
+
+  const finalVolume = computeSwe2DVolumeM3(state, grid);
+  const validation = validateSwe2DState(state);
+  let maxMomentum = 0;
+
+  for (let i = 0; i < state.h.length; i += 1) {
+    maxMomentum = Math.max(
+      maxMomentum,
+      Math.abs(state.hu[i]),
+      Math.abs(state.hv[i])
+    );
+  }
+
+  assert.equal(validation.valid, true, validation.reason);
+  assert.ok(maxMomentum < 1e-8);
+  assert.ok(
+    Math.abs(finalVolume - initialVolume) / initialVolume < 1e-10
+  );
+});
