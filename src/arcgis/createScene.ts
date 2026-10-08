@@ -22,12 +22,14 @@ import { RockfallSimulation } from "../simulation/RockfallSimulation";
 import { createSimulationSettings } from "../config/SimulationSettings";
 import {
   buildDownstreamInundationSurface,
-  traceDownstreamFlow
+  traceDownstreamFlow,
+  type DownstreamFlowPath
 } from "../physics/DownstreamInundation";
 import {
   simulateDownstreamShallowWater,
   type DownstreamShallowWaterResult
 } from "../physics/DownstreamShallowWater";
+import { simulateDownstreamSwe2D } from "../physics/DownstreamSwe2D";
 import {
   getDownstreamRasterLegend,
   renderDownstreamRaster,
@@ -132,6 +134,9 @@ export async function createScene(container: string): Promise<SceneView> {
   const help = document.querySelector<HTMLDivElement>("#help");
   const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
   const downstream = document.querySelector<HTMLDivElement>("#downstream");
+  const downstreamSolverMode = document.querySelector<HTMLSelectElement>(
+    "#downstreamSolverMode"
+  );
   const downstreamRasterMetric = document.querySelector<HTMLSelectElement>(
     "#downstreamRasterMetric"
   );
@@ -180,6 +185,15 @@ export async function createScene(container: string): Promise<SceneView> {
   let lastDownstreamRaster: DownstreamShallowWaterResult | null = null;
   let rasterMetric: DownstreamRasterMetric = "depth";
   let rasterOpacity = 0.65;
+  type DownstreamSolverMode = "reduced" | "swe2d";
+  interface FrozenDownstreamEvent {
+    flow: DownstreamFlowPath;
+    overtoppingHeadM: number;
+    measuredOverflowWidthM?: number;
+    traceGeneration: number;
+  }
+  let frozenDownstreamEvent: FrozenDownstreamEvent | null = null;
+  let downstreamSolverRunId = 0;
 
   const writeHelp = (message: string) => {
     if (help) {
@@ -275,6 +289,114 @@ export async function createScene(container: string): Promise<SceneView> {
       `<div class="raster-legend-labels"><span>${legend.minLabel}</span><span>${legend.maxLabel}</span></div>`;
   };
 
+  const getSelectedDownstreamSolverMode = (): DownstreamSolverMode =>
+    downstreamSolverMode?.value === "swe2d" ? "swe2d" : "reduced";
+
+  const formatDownstreamSolverLabel = (mode: DownstreamSolverMode) =>
+    mode === "swe2d" ? "SWE 2D experimental" : "reduced-order";
+
+  const cloneDownstreamFlow = (
+    flow: DownstreamFlowPath
+  ): DownstreamFlowPath => ({
+    source: flow.source.clone(),
+    points: flow.points.map((point) => [...point]),
+    lengthM: flow.lengthM,
+    elevationDropM: flow.elevationDropM
+  });
+
+  const runFrozenDownstreamSolver = async (
+    event: FrozenDownstreamEvent
+  ): Promise<DownstreamShallowWaterResult | null> => {
+    const runId = ++downstreamSolverRunId;
+    const mode = getSelectedDownstreamSolverMode();
+
+    if (downstream) {
+      downstream.textContent =
+        `Downstream: rerunning ${formatDownstreamSolverLabel(mode)} with frozen overtopping inputs...`;
+      downstream.dataset.state = "active";
+    }
+
+    try {
+      let effectiveMode = mode;
+      let result: DownstreamShallowWaterResult;
+
+      if (mode === "swe2d") {
+        try {
+          result = await simulateDownstreamSwe2D(
+            view,
+            event.flow,
+            event.overtoppingHeadM,
+            event.measuredOverflowWidthM
+          );
+        } catch (sweError: unknown) {
+          console.warn(
+            "SWE 2D downstream solver failed; falling back to reduced-order:",
+            sweError
+          );
+          effectiveMode = "reduced";
+          result = await simulateDownstreamShallowWater(
+            view,
+            event.flow,
+            event.overtoppingHeadM,
+            event.measuredOverflowWidthM
+          );
+        }
+      } else {
+        result = await simulateDownstreamShallowWater(
+          view,
+          event.flow,
+          event.overtoppingHeadM,
+          event.measuredOverflowWidthM
+        );
+      }
+
+      if (
+        runId !== downstreamSolverRunId ||
+        event.traceGeneration !== downstreamTraceGeneration
+      ) {
+        return null;
+      }
+
+      lastDownstreamRaster = result;
+      refreshDownstreamRaster();
+
+      writeHelp(
+        `Downstream ${formatDownstreamSolverLabel(effectiveMode)} — frozen input head ${event.overtoppingHeadM.toFixed(2)} m · width ${(event.measuredOverflowWidthM ?? result.effectiveOverflowWidthM).toFixed(1)} m · Qpeak ${result.peakDischargeM3s.toFixed(1)} m³/s · input ${result.inputVolumeM3.toFixed(0)} m³ · wet ${(result.wetAreaM2 / 10_000).toFixed(2)} ha · max depth ${result.peakDepthM.toFixed(2)} m · peak velocity ${result.peakVelocityMs.toFixed(2)} m/s · mass error ${result.massBalanceErrorPct.toFixed(3)}% · ${result.stopReason}${result.frontStillAdvancing ? " · front still advancing" : ""}.`
+      );
+
+      if (downstream) {
+        downstream.textContent =
+          `Downstream: ${formatDownstreamSolverLabel(effectiveMode)} A/B result — ${result.resolutionX}×${result.resolutionY} · wet ${(result.wetAreaM2 / 10_000).toFixed(2)} ha · head ${event.overtoppingHeadM.toFixed(2)} m · overflow ${result.effectiveOverflowWidthM.toFixed(0)} m · input ${result.inputVolumeM3.toFixed(0)} m³ · ${result.stopReason}${result.frontStillAdvancing ? " / front advancing" : ""}.`;
+        downstream.dataset.state = "active";
+      }
+
+      return result;
+    } catch (solverError: unknown) {
+      if (runId !== downstreamSolverRunId) {
+        return null;
+      }
+      console.warn("Frozen downstream solver rerun failed:", solverError);
+      if (downstream) {
+        downstream.textContent = "Downstream: frozen-input solver rerun failed.";
+        downstream.dataset.state = "error";
+      }
+      return null;
+    }
+  };
+
+  if (downstreamSolverMode) {
+    downstreamSolverMode.addEventListener("change", () => {
+      if (!frozenDownstreamEvent) {
+        writeHelp(
+          "Solver changed. The next overtopping event will use this solver."
+        );
+        return;
+      }
+
+      void runFrozenDownstreamSolver(frozenDownstreamEvent);
+    });
+  }
+
   if (downstreamRasterMetric) {
     downstreamRasterMetric.value = rasterMetric;
     downstreamRasterMetric.addEventListener("change", () => {
@@ -322,6 +444,8 @@ export async function createScene(container: string): Promise<SceneView> {
 
     const requestId = ++basinRequestId;
     downstreamTraceGeneration += 1;
+    frozenDownstreamEvent = null;
+    downstreamSolverRunId += 1;
     downstreamTraceStarted = false;
     overtoppingPeakHeight = 0;
     overtoppingPeakSourceT = null;
@@ -538,11 +662,15 @@ export async function createScene(container: string): Promise<SceneView> {
                     overtoppingPeakWidthFraction > 0
                       ? damLengthM * overtoppingPeakWidthFraction
                       : undefined;
-                  shallowWater = await simulateDownstreamShallowWater(
-                    view,
-                    flow,
-                    overtoppingHead,
-                    measuredOverflowWidthM
+                  frozenDownstreamEvent = {
+                    flow: cloneDownstreamFlow(flow),
+                    overtoppingHeadM: overtoppingHead,
+                    measuredOverflowWidthM,
+                    traceGeneration
+                  };
+
+                  shallowWater = await runFrozenDownstreamSolver(
+                    frozenDownstreamEvent
                   );
                   lastDownstreamRaster = shallowWater;
                   refreshDownstreamRaster();
@@ -767,7 +895,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · residual ${shallowWater.massBalanceResidualM3.toFixed(2)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(3)}% · hydrograph error ${shallowWater.hydrographVolumeErrorPct.toFixed(3)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s / ${shallowWater.simulationBlocks} blocks · front ${shallowWater.frontDistanceM.toFixed(0)} m @ ${shallowWater.frontSpeedMs.toFixed(2)} m/s · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream ${formatDownstreamSolverLabel(getSelectedDownstreamSolverMode())} — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · residual ${shallowWater.massBalanceResidualM3.toFixed(2)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(3)}% · hydrograph error ${shallowWater.hydrographVolumeErrorPct.toFixed(3)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s / ${shallowWater.simulationBlocks} blocks · front ${shallowWater.frontDistanceM.toFixed(0)} m @ ${shallowWater.frontSpeedMs.toFixed(2)} m/s · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
@@ -1243,6 +1371,8 @@ export async function createScene(container: string): Promise<SceneView> {
           lastDamProfilePoints = null;
           lastDamCrestElevation = null;
           downstreamTraceGeneration += 1;
+          frozenDownstreamEvent = null;
+          downstreamSolverRunId += 1;
           downstreamLayer.removeAll();
           downstreamRasterLayer.removeAll();
           lastDownstreamRaster = null;
@@ -1382,6 +1512,8 @@ export async function createScene(container: string): Promise<SceneView> {
       trajectoryLayer.removeAll();
       resultLayer.removeAll();
       downstreamTraceGeneration += 1;
+      frozenDownstreamEvent = null;
+      downstreamSolverRunId += 1;
       downstreamLayer.removeAll();
       downstreamRasterLayer.removeAll();
       lastDownstreamRaster = null;
