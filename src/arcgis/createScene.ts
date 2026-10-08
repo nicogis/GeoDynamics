@@ -197,7 +197,7 @@ export async function createScene(container: string): Promise<SceneView> {
   let overtoppingPeakLastIncreaseAt = 0;
   let overtoppingEventActive = false;
   let lastBasinSeed: Point | null = null;
-  let lastBasinSource: "automatic" | "manual" | null = null;
+  let lastBasinSource: BasinSource | null = null;
   let basinRegenerationTimer: number | null = null;
   let lastDownstreamRaster: DownstreamShallowWaterResult | null = null;
   let rasterMetric: DownstreamRasterMetric = "depth";
