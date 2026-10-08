@@ -154,6 +154,137 @@ function cellState(
   return [state.h[index], state.hu[index], state.hv[index]];
 }
 
+function reconstructHydrostaticState(
+  state: [number, number, number],
+  bedElevation: number,
+  interfaceBedElevation: number,
+  dryDepth: number
+): [number, number, number] {
+  const [h, hu, hv] = state;
+  const freeSurface = h + bedElevation;
+  const reconstructedDepth = Math.max(
+    0,
+    freeSurface - interfaceBedElevation
+  );
+
+  if (h <= dryDepth || reconstructedDepth <= dryDepth) {
+    return [0, 0, 0];
+  }
+
+  const scale = reconstructedDepth / h;
+  return [
+    reconstructedDepth,
+    hu * scale,
+    hv * scale
+  ];
+}
+
+function hydrostaticFluxX(
+  left: [number, number, number],
+  right: [number, number, number],
+  bedLeft: number,
+  bedRight: number,
+  gravity: number,
+  dryDepth: number
+): {
+  forLeftCell: [number, number, number];
+  forRightCell: [number, number, number];
+} {
+  const interfaceBed = Math.max(bedLeft, bedRight);
+  const leftReconstructed = reconstructHydrostaticState(
+    left,
+    bedLeft,
+    interfaceBed,
+    dryDepth
+  );
+  const rightReconstructed = reconstructHydrostaticState(
+    right,
+    bedRight,
+    interfaceBed,
+    dryDepth
+  );
+  const baseFlux = rusanovFluxX(
+    leftReconstructed,
+    rightReconstructed,
+    gravity,
+    dryDepth
+  );
+  const leftPressureCorrection =
+    0.5 * gravity *
+    (left[0] * left[0] -
+      leftReconstructed[0] * leftReconstructed[0]);
+  const rightPressureCorrection =
+    0.5 * gravity *
+    (right[0] * right[0] -
+      rightReconstructed[0] * rightReconstructed[0]);
+
+  return {
+    forLeftCell: [
+      baseFlux[0],
+      baseFlux[1] + leftPressureCorrection,
+      baseFlux[2]
+    ],
+    forRightCell: [
+      baseFlux[0],
+      baseFlux[1] + rightPressureCorrection,
+      baseFlux[2]
+    ]
+  };
+}
+
+function hydrostaticFluxY(
+  bottom: [number, number, number],
+  top: [number, number, number],
+  bedBottom: number,
+  bedTop: number,
+  gravity: number,
+  dryDepth: number
+): {
+  forBottomCell: [number, number, number];
+  forTopCell: [number, number, number];
+} {
+  const interfaceBed = Math.max(bedBottom, bedTop);
+  const bottomReconstructed = reconstructHydrostaticState(
+    bottom,
+    bedBottom,
+    interfaceBed,
+    dryDepth
+  );
+  const topReconstructed = reconstructHydrostaticState(
+    top,
+    bedTop,
+    interfaceBed,
+    dryDepth
+  );
+  const baseFlux = rusanovFluxY(
+    bottomReconstructed,
+    topReconstructed,
+    gravity,
+    dryDepth
+  );
+  const bottomPressureCorrection =
+    0.5 * gravity *
+    (bottom[0] * bottom[0] -
+      bottomReconstructed[0] * bottomReconstructed[0]);
+  const topPressureCorrection =
+    0.5 * gravity *
+    (top[0] * top[0] -
+      topReconstructed[0] * topReconstructed[0]);
+
+  return {
+    forBottomCell: [
+      baseFlux[0],
+      baseFlux[1],
+      baseFlux[2] + bottomPressureCorrection
+    ],
+    forTopCell: [
+      baseFlux[0],
+      baseFlux[1],
+      baseFlux[2] + topPressureCorrection
+    ]
+  };
+}
+
 export function createSwe2DState(cellCount: number): Swe2DState {
   return {
     h: new Float64Array(cellCount),
@@ -266,29 +397,54 @@ export function advanceSwe2D(
   const nextHu = new Float64Array(state.hu);
   const nextHv = new Float64Array(state.hv);
 
-  const xFluxes: [number, number, number][] =
+  const xFluxForLeftCell: [number, number, number][] =
     new Array(ny * (nx + 1));
-  const yFluxes: [number, number, number][] =
+  const xFluxForRightCell: [number, number, number][] =
+    new Array(ny * (nx + 1));
+  const yFluxForBottomCell: [number, number, number][] =
+    new Array((ny + 1) * nx);
+  const yFluxForTopCell: [number, number, number][] =
     new Array((ny + 1) * nx);
 
   for (let row = 0; row < ny; row += 1) {
     for (let face = 0; face <= nx; face += 1) {
       let left: [number, number, number];
       let right: [number, number, number];
+      let bedLeft: number;
+      let bedRight: number;
 
       if (face === 0) {
-        right = cellState(state, indexOf(row, 0, nx));
+        const rightIndex = indexOf(row, 0, nx);
+        right = cellState(state, rightIndex);
         left = reflectedX(...right);
+        bedRight = bed[rightIndex];
+        bedLeft = bedRight;
       } else if (face === nx) {
-        left = cellState(state, indexOf(row, nx - 1, nx));
+        const leftIndex = indexOf(row, nx - 1, nx);
+        left = cellState(state, leftIndex);
         right = reflectedX(...left);
+        bedLeft = bed[leftIndex];
+        bedRight = bedLeft;
       } else {
-        left = cellState(state, indexOf(row, face - 1, nx));
-        right = cellState(state, indexOf(row, face, nx));
+        const leftIndex = indexOf(row, face - 1, nx);
+        const rightIndex = indexOf(row, face, nx);
+        left = cellState(state, leftIndex);
+        right = cellState(state, rightIndex);
+        bedLeft = bed[leftIndex];
+        bedRight = bed[rightIndex];
       }
 
-      xFluxes[row * (nx + 1) + face] =
-        rusanovFluxX(left, right, gravity, dryDepth);
+      const flux = hydrostaticFluxX(
+        left,
+        right,
+        bedLeft,
+        bedRight,
+        gravity,
+        dryDepth
+      );
+      const fluxIndex = row * (nx + 1) + face;
+      xFluxForLeftCell[fluxIndex] = flux.forLeftCell;
+      xFluxForRightCell[fluxIndex] = flux.forRightCell;
     }
   }
 
@@ -296,20 +452,41 @@ export function advanceSwe2D(
     for (let col = 0; col < nx; col += 1) {
       let bottom: [number, number, number];
       let top: [number, number, number];
+      let bedBottom: number;
+      let bedTop: number;
 
       if (face === 0) {
-        top = cellState(state, indexOf(0, col, nx));
+        const topIndex = indexOf(0, col, nx);
+        top = cellState(state, topIndex);
         bottom = reflectedY(...top);
+        bedTop = bed[topIndex];
+        bedBottom = bedTop;
       } else if (face === ny) {
-        bottom = cellState(state, indexOf(ny - 1, col, nx));
+        const bottomIndex = indexOf(ny - 1, col, nx);
+        bottom = cellState(state, bottomIndex);
         top = reflectedY(...bottom);
+        bedBottom = bed[bottomIndex];
+        bedTop = bedBottom;
       } else {
-        bottom = cellState(state, indexOf(face - 1, col, nx));
-        top = cellState(state, indexOf(face, col, nx));
+        const bottomIndex = indexOf(face - 1, col, nx);
+        const topIndex = indexOf(face, col, nx);
+        bottom = cellState(state, bottomIndex);
+        top = cellState(state, topIndex);
+        bedBottom = bed[bottomIndex];
+        bedTop = bed[topIndex];
       }
 
-      yFluxes[face * nx + col] =
-        rusanovFluxY(bottom, top, gravity, dryDepth);
+      const flux = hydrostaticFluxY(
+        bottom,
+        top,
+        bedBottom,
+        bedTop,
+        gravity,
+        dryDepth
+      );
+      const fluxIndex = face * nx + col;
+      yFluxForBottomCell[fluxIndex] = flux.forBottomCell;
+      yFluxForTopCell[fluxIndex] = flux.forTopCell;
     }
   }
 
@@ -319,10 +496,14 @@ export function advanceSwe2D(
   for (let row = 0; row < ny; row += 1) {
     for (let col = 0; col < nx; col += 1) {
       const i = indexOf(row, col, nx);
-      const leftFlux = xFluxes[row * (nx + 1) + col];
-      const rightFlux = xFluxes[row * (nx + 1) + col + 1];
-      const bottomFlux = yFluxes[row * nx + col];
-      const topFlux = yFluxes[(row + 1) * nx + col];
+      const leftFlux =
+        xFluxForRightCell[row * (nx + 1) + col];
+      const rightFlux =
+        xFluxForLeftCell[row * (nx + 1) + col + 1];
+      const bottomFlux =
+        yFluxForTopCell[row * nx + col];
+      const topFlux =
+        yFluxForBottomCell[(row + 1) * nx + col];
 
       let h =
         state.h[i] -
@@ -336,22 +517,6 @@ export function advanceSwe2D(
         state.hv[i] -
         dtSeconds / dx * (rightFlux[2] - leftFlux[2]) -
         dtSeconds / dy * (topFlux[2] - bottomFlux[2]);
-
-      const leftCol = Math.max(col - 1, 0);
-      const rightCol = Math.min(col + 1, nx - 1);
-      const bottomRow = Math.max(row - 1, 0);
-      const topRow = Math.min(row + 1, ny - 1);
-      const dzdx =
-        (bed[indexOf(row, rightCol, nx)] -
-          bed[indexOf(row, leftCol, nx)]) /
-        Math.max((rightCol - leftCol) * dx, dx);
-      const dzdy =
-        (bed[indexOf(topRow, col, nx)] -
-          bed[indexOf(bottomRow, col, nx)]) /
-        Math.max((topRow - bottomRow) * dy, dy);
-
-      hu -= dtSeconds * gravity * Math.max(h, 0) * dzdx;
-      hv -= dtSeconds * gravity * Math.max(h, 0) * dzdy;
 
       if (h < 0) {
         h = 0;
