@@ -2,7 +2,7 @@
 
 **Experimental geospatial physics simulations on real-world 3D terrain.**
 
-GeoDynamics explores how a GIS can become an interactive simulation environment by combining ArcGIS Maps SDK for JavaScript with terrain sampling, custom WebGL2 rendering, rigid-body physics, reduced-order hydraulic simulation and GIS-native analysis outputs.
+GeoDynamics explores how a GIS can become an interactive simulation environment by combining ArcGIS Maps SDK for JavaScript with terrain sampling, custom WebGL2 rendering, rigid-body physics, reduced-order and experimental 2D shallow-water hydraulics, reproducible scenario persistence and GIS-native analysis outputs.
 
 ## Vision
 
@@ -15,7 +15,7 @@ The current proof of concept links four systems:
 3. **ArcGIS RenderNode / WebGL2** renders the rock and a persistent GPU water surface inside the SceneView rendering pipeline.
 4. **Downstream raster simulation** converts overtopping into depth, velocity, arrival-time and hazard outputs that can be inspected and exported.
 
-The project is intentionally experimental. The downstream model is currently a reduced-order kinematic/diffusive raster solver, not a full 2D shallow-water-equation solver. Numerical accounting, topology and mass conservation are explicitly tested so that future solver upgrades have a reproducible baseline.
+The project is intentionally experimental. The downstream stage can run either the established reduced-order raster solver or an experimental 2D shallow-water-equation (SWE) solver. The SWE path evolves depth and horizontal momentum with CFL-controlled time stepping, while the reduced-order solver remains the stable reference/fallback. Numerical accounting, topology, mass conservation and frozen A/B events are used to keep solver comparisons reproducible.
 
 ## Technology
 
@@ -34,7 +34,7 @@ The project is intentionally experimental. The downstream model is currently a r
 3. **Rockfall physics** — ArcGIS terrain sampling, Rapier triangle-mesh collider, rigid body and rotation. ✅
 4. **Trajectory GIS output** — 3D path, runout, distance and speed telemetry. ✅
 5. **GIS rockfall result** — endpoint, elevation drop, mass and kinetic-energy attributes. ✅
-6. **Higher-fidelity rockfall physics** — 129 × 129 terrain sampling and irregular convex rock collider. ✅
+6. **Higher-fidelity rockfall physics** — adaptive ArcGIS terrain sampling up to 257 × 257 over a 4.8 km domain, batched DEM queries and an irregular convex rock collider. ✅
 7. **Water surface base** — animated custom WebGL water surface. ✅
 8. **Rock-water coupling** — impact-generated disturbance, drag and buoyancy. ✅
 9. **Persistent GPU water state** — ping-pong floating-point textures for height and vertical velocity. ✅
@@ -47,9 +47,11 @@ The project is intentionally experimental. The downstream model is currently a r
 16. **GIS raster visualization** — selectable max-depth, velocity, arrival-time and hazard metrics. ✅
 17. **Hazard outputs** — experimental depth × velocity hazard index, classes, popups and GeoJSON export. ✅
 18. **Reservoir topology validation** — synthetic valleys, oblique dams, closed depressions and zero-freeboard regression tests. ✅
-19. **Water/dam visual realism** — depth-aware water rendering, micro-ripples and cleaner dam visualization. ✅
+19. **Water/dam visual realism** — depth-aware GPU water, dynamic height-field motion, Fresnel/specular shading, micro-ripples and cleaner dam visualization. ✅
 20. **Mass-conservation validation** — conservative transfer core, outflow accounting, signed residual and hydrograph integration checks. ✅
-21. **Next step: 2D shallow-water equations** — conservative mass + momentum solver with CFL-controlled time stepping. 🚧
+21. **Experimental SWE 2D solver** — depth + horizontal momentum, CFL-controlled stepping, frozen-event A/B comparison and reduced-order fallback. ✅
+22. **Scenario JSON persistence** — camera, parameters, dam, reservoir seed/source and downstream display/solver state can be saved and restored reproducibly. ✅
+23. **Extended rockfall domain** — 4.8 km terrain window with batched elevation sampling and ~2.3 km usable runout radius. ✅
 
 ## Current POC workflow
 
@@ -67,9 +69,11 @@ The runtime panel exposes parameters such as:
 - rock radius and density;
 - release height;
 - water drag;
-- downstream raster metric and opacity.
+- downstream solver (reduced-order or experimental SWE 2D);
+- downstream raster metric and opacity;
+- scenario JSON save/load for reproducible test cases.
 
-The rockfall runs in a local metric Rapier frame built from an ArcGIS terrain sample. The water basin is constrained by the sampled dam and DEM topology. If an impact wave exceeds the available freeboard, overtopping is detected along the crest and a downstream raster simulation is generated.
+The rockfall runs in a local metric Rapier frame built from an adaptive ArcGIS terrain sample. By default the terrain window spans 4.8 km and uses up to 257 × 257 samples, queried in batches while preserving roughly the previous ~18.75 m grid spacing. The usable runout boundary is about 2.325 km from the release point. The water basin is constrained by the sampled dam and DEM topology. If an impact wave exceeds the available freeboard, overtopping is detected along the crest and the selected downstream solver is executed.
 
 The downstream result currently includes:
 
@@ -88,6 +92,19 @@ The downstream result currently includes:
 - mass-balance error;
 - analytical-vs-discrete hydrograph volume error;
 - experimental hazard index and hazard classes.
+
+## Scenario persistence
+
+GeoDynamics scenarios can be saved to and restored from JSON. The versioned schema currently persists:
+
+- SceneView camera position, heading and tilt;
+- all simulation settings;
+- dam start/end points;
+- reservoir seed and whether it came from automatic or manual selection;
+- downstream solver mode;
+- downstream raster metric and opacity.
+
+Scenario loading validates the nested JSON before applying it, cancels active rockfall work, clears transient reservoir/downstream state, restores the camera and then deterministically regenerates the saved reservoir. This is primarily intended for reproducing camera-, terrain- and geometry-sensitive test cases while development continues.
 
 ## Physical coordinate systems
 
@@ -109,12 +126,14 @@ Three.js is used for geometry and matrix utilities, but **THREE.WebGLRenderer do
 
 The water renderer uses:
 
-- DEM-derived basin depth;
-- persistent GPU height/velocity state;
-- impact injection;
-- depth-dependent water colour;
-- procedural micro-ripples;
-- shoreline/crest foam cues;
+- DEM-derived basin depth and wet mask;
+- persistent ping-pong GPU height/velocity state;
+- rock-impact disturbance injection;
+- dynamic height-field displacement;
+- normals derived from the physical wave field plus subtle procedural micro-ripples;
+- depth-dependent colour, Fresnel/specular response and shoreline/crest foam cues;
+- ArcGIS local East/North/Up render transforms;
+- explicit WebGL texture-orientation state for the shared SceneView context;
 - shared SceneView depth.
 
 ## Reservoir topology
@@ -130,11 +149,13 @@ Important safeguards include:
 - a small topology-only elevation epsilon so zero freeboard does not create crest-level connectivity artefacts;
 - deterministic synthetic tests for simple, concave, branched, symmetric and oblique terrain.
 
-## Downstream solver
+## Downstream solvers
 
-The current downstream raster model is deliberately a **reduced-order hydraulic solver**.
+GeoDynamics now exposes two downstream solver modes.
 
-It uses:
+### Reduced-order solver
+
+The reduced-order solver remains the stable reference implementation. It uses:
 
 - explicit overtopping input from a broad-crested-weir-style discharge estimate;
 - a compact triangular hydrograph;
@@ -146,7 +167,11 @@ It uses:
 - wet/dry thresholds;
 - mass accounting for input, storage and outflow.
 
-It is not yet a complete Saint-Venant / full 2D SWE implementation because horizontal momentum is not evolved as a conserved state.
+### Experimental SWE 2D solver
+
+The experimental SWE path evolves water depth and horizontal momentum on a raster domain with CFL-controlled time stepping. It is intentionally marked experimental: the same frozen overtopping event can be rerun through either solver for A/B comparison, and failures fall back to the reduced-order implementation instead of invalidating the interactive workflow.
+
+This makes the reduced-order solver the reproducible baseline while the SWE implementation can be advanced incrementally toward a more complete Saint-Venant treatment.
 
 ### Mass accounting
 
@@ -251,11 +276,12 @@ ArcGIS SceneView
       |       +-- rock impact injection
       |       +-- overtopping detection
       |
-      +-- Downstream raster solver
+      +-- Downstream solvers
       |       |
-      |       +-- overtopping hydrograph
-      |       +-- Manning / terrain routing
-      |       +-- adaptive domain
+      |       +-- frozen overtopping event
+      |       +-- reduced-order raster solver
+      |       +-- experimental SWE 2D solver
+      |       +-- fallback / A-B comparison
       |       +-- mass accounting
       |
       +-- GIS outputs
@@ -275,24 +301,26 @@ Current strengths:
 - real-world ArcGIS terrain coupling;
 - reproducible geospatial/physics coordinate transforms;
 - conservative water-volume accounting;
+- reduced-order + experimental SWE 2D comparison on frozen events;
+- versioned JSON scenario persistence for reproducibility;
 - explicit diagnostics and synthetic tests;
 - integrated GIS visualization.
 
 Current limitations:
 
-- downstream hydraulics use a reduced-order model;
-- no conserved horizontal momentum field yet;
-- no formal 2D Riemann flux;
+- the SWE 2D path is still experimental and not a validated engineering solver;
+- no formal production-grade Riemann solver / high-resolution shock-capturing scheme yet;
 - no benchmark validation against laboratory or regulatory reference datasets yet;
-- no uncertainty/calibration workflow yet.
+- no uncertainty/calibration workflow yet;
+- rockfall terrain is still a finite sampled window, currently 4.8 km across.
 
-The next hydraulic milestone is a full conservative 2D SWE foundation with explicit wet/dry treatment and CFL-controlled time stepping.
+The next hydraulic milestones are stronger wet/dry treatment, higher-order/conservative fluxes, reference-benchmark validation and systematic comparison between the reduced-order and SWE 2D solvers.
 
 ## Notes
 
 `RenderNode` is an advanced ArcGIS rendering API and is isolated in the rendering layer.
 
-The GPU reservoir-wave simulation and downstream raster simulation solve different problems: the former provides local visual/impact-wave behaviour inside the reservoir, while the latter estimates downstream propagation after overtopping.
+The GPU reservoir-wave simulation and downstream hydraulic solvers solve different problems: the former provides local visual/impact-wave behaviour inside the reservoir, while the latter estimate downstream propagation after overtopping. Procedural ambient water motion is visual only and does not modify hydraulic state or overtopping calculations.
 
 ## License
 
