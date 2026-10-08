@@ -1163,15 +1163,15 @@ export async function createScene(container: string): Promise<SceneView> {
     damPreviewGraphic = null;
     damGroundPreviewGraphic = null;
 
-    if (!frozenDam) {
+    if (!damBarrier) {
       return;
     }
 
     const damLine = new Polyline({
       spatialReference: view.spatialReference,
       paths: [[
-        [frozenDam.start.x, frozenDam.start.y, frozenDam.start.z ?? 0],
-        [frozenDam.end.x, frozenDam.end.y, frozenDam.end.z ?? 0]
+        [damBarrier.start.x, damBarrier.start.y, damBarrier.start.z ?? 0],
+        [damBarrier.end.x, damBarrier.end.y, damBarrier.end.z ?? 0]
       ]]
     });
 
@@ -1199,10 +1199,10 @@ export async function createScene(container: string): Promise<SceneView> {
         tilt: camera.tilt
       },
       settings: { ...settings },
-      dam: frozenDam
+      dam: damBarrier
         ? {
-            start: toScenarioPoint(frozenDam.start),
-            end: toScenarioPoint(frozenDam.end)
+            start: toScenarioPoint(damBarrier.start),
+            end: toScenarioPoint(damBarrier.end)
           }
         : null,
       basin:
@@ -1221,6 +1221,16 @@ export async function createScene(container: string): Promise<SceneView> {
   };
 
   const loadScenario = async (scenario: GeoDynamicsScenario) => {
+    if (basinRegenerationTimer !== null) {
+      window.clearTimeout(basinRegenerationTimer);
+      basinRegenerationTimer = null;
+    }
+    pendingBasinRegeneration = false;
+    basinRunInProgress = false;
+    simulation.cancel();
+    waterNode.clearBasin();
+    damWaterLevelGraphic = null;
+
     basinRequestId += 1;
     downstreamTraceGeneration += 1;
     downstreamSolverRunId += 1;
@@ -1252,7 +1262,7 @@ export async function createScene(container: string): Promise<SceneView> {
     }
 
     damStart = null;
-    frozenDam = scenario.dam
+    damBarrier = scenario.dam
       ? {
           start: fromScenarioPoint(scenario.dam.start),
           end: fromScenarioPoint(scenario.dam.end)
@@ -1275,7 +1285,7 @@ export async function createScene(container: string): Promise<SceneView> {
       { animate: false }
     );
 
-    if (frozenDam && lastBasinSeed && lastBasinSource) {
+    if (damBarrier && lastBasinSeed && lastBasinSource) {
       await applyBasin(lastBasinSeed, lastBasinSource);
       writeStatus("Scenario loaded. Reservoir regenerated from saved JSON.");
     } else {
