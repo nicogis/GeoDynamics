@@ -507,6 +507,8 @@ const renderFragmentSource = `#version 300 es
   precision highp float;
 
   uniform sampler2D uMask;
+  uniform sampler2D uDepth;
+  uniform float uTime;
 
   in float vHeight;
   in vec2 vUv;
@@ -527,27 +529,53 @@ const renderFragmentSource = `#version 300 es
     vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
 
     float diffuse = max(dot(normal, lightDirection), 0.0);
-    float specular = pow(max(dot(normal, halfVector), 0.0), 28.0);
+    float specular = pow(max(dot(normal, halfVector), 0.0), 42.0);
     float slope = clamp(length(normal.xy) * 1.8, 0.0, 1.0);
+    float basinDepth = max(texture(uDepth, vUv).r, 0.0);
 
-    vec3 troughColor = vec3(0.018, 0.10, 0.18);
-    vec3 baseColor = vec3(0.025, 0.22, 0.32);
-    vec3 crestColor = vec3(0.30, 0.72, 0.78);
+    // Approximate view-angle Fresnel from the local geographic up component.
+    // It is intentionally subtle because ArcGIS still owns the scene
+    // illumination and render target.
+    float facing = clamp(abs(normal.z), 0.0, 1.0);
+    float fresnel = pow(1.0 - facing, 3.0);
 
-    float positiveCrest = smoothstep(0.08, 1.4, vHeight);
-    float negativeTrough = smoothstep(0.08, 1.2, -vHeight);
+    // Procedural micro-ripples add small-scale variation without introducing
+    // external texture assets or another renderer/context.
+    float rippleA = sin(vUv.x * 190.0 + uTime * 0.0017);
+    float rippleB = sin(vUv.y * 157.0 - uTime * 0.0013);
+    float microRipple = (rippleA + rippleB) * 0.5;
 
-    vec3 color = baseColor;
-    color = mix(color, crestColor, positiveCrest * 0.72);
-    color = mix(color, troughColor, negativeTrough * 0.78);
+    vec3 shallowColor = vec3(0.055, 0.34, 0.40);
+    vec3 deepColor = vec3(0.012, 0.075, 0.16);
+    vec3 crestColor = vec3(0.46, 0.82, 0.86);
 
-    // The slope term makes moving wave fronts visible even when the height
-    // difference itself is small.
-    color += slope * vec3(0.05, 0.12, 0.15);
-    color *= 0.78 + diffuse * 0.32;
-    color += specular * vec3(0.65, 0.80, 0.85);
+    float depthMix = smoothstep(0.5, 18.0, basinDepth);
+    vec3 color = mix(shallowColor, deepColor, depthMix);
 
-    fragColor = vec4(color, 0.82);
+    float positiveCrest = smoothstep(0.06, 1.15, vHeight);
+    float negativeTrough = smoothstep(0.06, 1.0, -vHeight);
+    color = mix(color, crestColor, positiveCrest * 0.68);
+    color *= 1.0 - negativeTrough * 0.22;
+
+    // Shoreline foam is derived from the actual basin depth texture, so it
+    // follows terrain instead of forming an artificial rectangular border.
+    float shorelineFoam =
+      (1.0 - smoothstep(0.08, 1.1, basinDepth)) *
+      (0.45 + 0.55 * smoothstep(0.02, 0.35, abs(vHeight) + slope));
+    float crestFoam = positiveCrest * smoothstep(0.08, 0.42, slope);
+    float foam = clamp(shorelineFoam + crestFoam, 0.0, 1.0);
+
+    color += slope * vec3(0.035, 0.075, 0.09);
+    color += microRipple * 0.018;
+    color *= 0.76 + diffuse * 0.34;
+    color += specular * vec3(0.72, 0.86, 0.92);
+    color = mix(color, vec3(0.82, 0.93, 0.94), foam * 0.72);
+    color = mix(color, vec3(0.16, 0.34, 0.44), fresnel * 0.28);
+
+    float alpha =
+      mix(0.66, 0.90, smoothstep(0.2, 12.0, basinDepth)) +
+      foam * 0.06;
+    fragColor = vec4(color, clamp(alpha, 0.62, 0.94));
   }
 `;
 
@@ -1204,6 +1232,13 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
     gl.uniform1i(gl.getUniformLocation(this.renderProgram, "uMask"), 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.depthTexture);
+    gl.uniform1i(gl.getUniformLocation(this.renderProgram, "uDepth"), 2);
+    gl.uniform1f(
+      gl.getUniformLocation(this.renderProgram, "uTime"),
+      performance.now()
+    );
     gl.uniform2f(
       gl.getUniformLocation(this.renderProgram, "uTexel"),
       1 / WATER_TEXTURE_SIZE,
