@@ -2,7 +2,7 @@ import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 import RenderNode from "@arcgis/core/views/3d/webgl/RenderNode";
 import * as webgl from "@arcgis/core/views/3d/webgl";
-import { Matrix4 } from "three";
+import { Matrix4, Vector3 } from "three";
 
 const WATER_TEXTURE_SIZE = 128;
 const WATER_GRID_RESOLUTION = 128;
@@ -223,16 +223,13 @@ function createWaterMesh(
   center: Point,
   size: number,
   elevation: number,
-  renderOrigin: ArrayLike<number>
+  localToRender: ArrayLike<number>
 ): Float32Array {
   const half = size / 2;
   const cells = WATER_GRID_RESOLUTION;
   const gridSize = cells + 1;
   const gridVertexCount = gridSize * gridSize;
-  const baseSource = new Float64Array(gridVertexCount * 3);
-  const upSource = new Float64Array(gridVertexCount * 3);
-  const eastSource = new Float64Array(gridVertexCount * 3);
-  const northSource = new Float64Array(gridVertexCount * 3);
+  const source = new Float64Array(gridVertexCount * 3);
 
   for (let row = 0; row < gridSize; row += 1) {
     const v = row / cells;
@@ -242,113 +239,69 @@ function createWaterMesh(
       const u = col / cells;
       const x = center.x - half + u * size;
       const index = (row * gridSize + col) * 3;
-
-      baseSource[index] = x;
-      baseSource[index + 1] = y;
-      baseSource[index + 2] = elevation;
-
-      upSource[index] = x;
-      upSource[index + 1] = y;
-      upSource[index + 2] = elevation + 1;
-
-      eastSource[index] = x + 1;
-      eastSource[index + 1] = y;
-      eastSource[index + 2] = elevation;
-
-      northSource[index] = x;
-      northSource[index + 1] = y + 1;
-      northSource[index + 2] = elevation;
+      source[index] = x;
+      source[index + 1] = y;
+      source[index + 2] = elevation;
     }
   }
 
-  const baseRender = new Float64Array(gridVertexCount * 3);
-  const upRender = new Float64Array(gridVertexCount * 3);
-  const eastRender = new Float64Array(gridVertexCount * 3);
-  const northRender = new Float64Array(gridVertexCount * 3);
-
-  const spatialReference = center.spatialReference;
-  const transformedBase = webgl.toRenderCoordinates(
+  const render = new Float64Array(gridVertexCount * 3);
+  const transformed = webgl.toRenderCoordinates(
     view,
-    baseSource,
+    source,
     0,
-    spatialReference,
-    baseRender,
-    0,
-    gridVertexCount
-  );
-  const transformedUp = webgl.toRenderCoordinates(
-    view,
-    upSource,
-    0,
-    spatialReference,
-    upRender,
-    0,
-    gridVertexCount
-  );
-  const transformedEast = webgl.toRenderCoordinates(
-    view,
-    eastSource,
-    0,
-    spatialReference,
-    eastRender,
-    0,
-    gridVertexCount
-  );
-  const transformedNorth = webgl.toRenderCoordinates(
-    view,
-    northSource,
-    0,
-    spatialReference,
-    northRender,
+    center.spatialReference,
+    render,
     0,
     gridVertexCount
   );
 
-  if (
-    !transformedBase ||
-    !transformedUp ||
-    !transformedEast ||
-    !transformedNorth
-  ) {
+  if (!transformed) {
     throw new Error("Unable to transform water mesh into ArcGIS render coordinates.");
   }
 
-  // position.xyz + uv + localUp.xyz + localEast.xyz + localNorth.xyz
+  const renderToLocal = new Matrix4()
+    .fromArray(Array.from(localToRender))
+    .invert();
+  const local = new Float64Array(gridVertexCount * 3);
+  const point = new Vector3();
+
+  for (let i = 0; i < gridVertexCount; i += 1) {
+    const index = i * 3;
+    point
+      .set(render[index], render[index + 1], render[index + 2])
+      .applyMatrix4(renderToLocal);
+    local[index] = point.x;
+    local[index + 1] = point.y;
+    local[index + 2] = point.z;
+  }
+
   const floatsPerVertex = 14;
-  const data = new Float32Array(
-    cells * cells * 6 * floatsPerVertex
-  );
+  const data = new Float32Array(cells * cells * 6 * floatsPerVertex);
   let offset = 0;
-
-  const writeDirection = (
-    from: Float64Array,
-    to: Float64Array,
-    index: number
-  ) => {
-    const x = to[index] - from[index];
-    const y = to[index + 1] - from[index + 1];
-    const z = to[index + 2] - from[index + 2];
-    const length = Math.hypot(x, y, z) || 1;
-
-    data[offset++] = x / length;
-    data[offset++] = y / length;
-    data[offset++] = z / length;
-  };
 
   const writeVertex = (col: number, row: number) => {
     const u = col / cells;
     const v = row / cells;
     const index = (row * gridSize + col) * 3;
 
-    data[offset++] = baseRender[index] - renderOrigin[0];
-    data[offset++] = baseRender[index + 1] - renderOrigin[1];
-    data[offset++] = baseRender[index + 2] - renderOrigin[2];
+    data[offset++] = local[index];
+    data[offset++] = local[index + 1];
+    data[offset++] = local[index + 2];
     data[offset++] = u;
     data[offset++] = v;
 
-    writeDirection(baseRender, upRender, index);
-    writeDirection(baseRender, eastRender, index);
-    writeDirection(baseRender, northRender, index);
+    data[offset++] = 0;
+    data[offset++] = 0;
+    data[offset++] = 1;
+
+    data[offset++] = 1;
+    data[offset++] = 0;
+    data[offset++] = 0;
+
+    data[offset++] = 0;
+    data[offset++] = 1;
+    data[offset++] = 0;
   };
 
   for (let row = 0; row < cells; row += 1) {
@@ -638,32 +591,21 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.overtoppingCallback = null;
     this.lastOvertoppingRead = 0;
 
-    const renderOrigin = new Float64Array(3);
-    const transformedOrigin = webgl.toRenderCoordinates(
+    const transform = webgl.renderCoordinateTransformAt(
       this.view,
       [center.x, center.y, elevation],
-      0,
       center.spatialReference,
-      renderOrigin,
-      0,
-      1
+      new Float64Array(16)
     );
 
-    if (!transformedOrigin) {
+    if (!transform) {
       this.waterTransform = null;
       throw new Error(
-        "Unable to transform the reservoir origin into ArcGIS render coordinates."
+        "Unable to create the reservoir local render transform."
       );
     }
 
-    // Keep vertex coordinates close to zero for WebGL precision. The mesh is
-    // generated from exact GIS positions and stored relative to this origin.
-    this.waterTransform = new Float64Array([
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 1, 0,
-      renderOrigin[0], renderOrigin[1], renderOrigin[2], 1
-    ]);
+    this.waterTransform = new Float64Array(transform);
     this.pendingImpact = null;
 
     if (this.initializedResources) {
@@ -875,17 +817,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       return;
     }
 
-    const renderOrigin = [
-      this.waterTransform[12],
-      this.waterTransform[13],
-      this.waterTransform[14]
-    ];
     const mesh = createWaterMesh(
       this.view,
       this.center,
       this.size,
       this.surfaceElevation,
-      renderOrigin
+      this.waterTransform
     );
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
@@ -1285,9 +1222,20 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       this.gl.getParameter(this.gl.VIEWPORT) as Int32Array
     );
 
-    if (!this.waterTransform) {
+    if (!this.center || this.surfaceElevation === null) {
       return output;
     }
+
+    const transform = webgl.renderCoordinateTransformAt(
+      this.view,
+      [this.center.x, this.center.y, this.surfaceElevation],
+      this.center.spatialReference,
+      new Float64Array(16)
+    );
+    if (!transform) {
+      return output;
+    }
+    this.waterTransform = new Float64Array(transform);
 
     this.ensureResources();
     this.runImpactPass();
