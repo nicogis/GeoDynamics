@@ -24,6 +24,10 @@ import {
   type SimulationSettings
 } from "../config/SimulationSettings";
 import {
+  GEODYNAMICS_VERSION,
+  SCENARIO_SCHEMA_VERSION
+} from "../config/ReleaseInfo";
+import {
   buildDownstreamInundationSurface,
   traceDownstreamFlow,
   type DownstreamFlowPath
