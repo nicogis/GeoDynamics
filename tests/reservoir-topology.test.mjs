@@ -218,3 +218,88 @@ verifyReservoir("closed depression", {
     assert.ok(Math.abs(result.centroidX) < 20);
   }
 });
+
+
+test("zero freeboard does not connect through a crest-level saddle", () => {
+  const center = { x: 0, y: 180 };
+  const dam = horizontalDam;
+  const seed = { x: 0, y: 75 };
+
+  const elevations = grid(center.x, center.y, (x, y) => {
+    const mainValley =
+      78 +
+      Math.abs(x) * 0.055 +
+      Math.pow((y - 165) / 185, 2) * 7;
+
+    // A side lobe becomes reachable only through a narrow saddle exactly at
+    // crest level. The visual water surface may reach the crest, but the
+    // topological flood-fill should stay a few centimetres below it.
+    const sideLobe =
+      80 +
+      Math.abs(x - 185) * 0.04 +
+      Math.pow((y - 205) / 125, 2) * 6;
+
+    const saddle =
+      Math.abs(x - 105) < 18 &&
+      y > 120 &&
+      y < 175
+        ? WATER
+        : Number.POSITIVE_INFINITY;
+
+    return Math.min(mainValley, sideLobe, saddle);
+  });
+
+  const zeroFreeboard = buildConnectedReservoirMask({
+    elevations,
+    centerX: center.x,
+    centerY: center.y,
+    size: SIZE,
+    resolution: RESOLUTION,
+    seedX: seed.x,
+    seedY: seed.y,
+    dam,
+    waterElevation: WATER,
+    connectivityElevation: WATER - 0.08
+  });
+
+  const halfMetreFreeboard = buildConnectedReservoirMask({
+    elevations,
+    centerX: center.x,
+    centerY: center.y,
+    size: SIZE,
+    resolution: RESOLUTION,
+    seedX: seed.x,
+    seedY: seed.y,
+    dam,
+    waterElevation: WATER - 0.5,
+    connectivityElevation: WATER - 0.58
+  });
+
+  assert.equal(zeroFreeboard.touchesBoundary, false);
+  assert.equal(halfMetreFreeboard.touchesBoundary, false);
+
+  const zeroSide = Math.sign(
+    sideOfDamLine(
+      zeroFreeboard.centroidX,
+      zeroFreeboard.centroidY,
+      dam
+    )
+  );
+  const halfMetreSide = Math.sign(
+    sideOfDamLine(
+      halfMetreFreeboard.centroidX,
+      halfMetreFreeboard.centroidY,
+      dam
+    )
+  );
+
+  assert.equal(zeroSide, halfMetreSide);
+  assert.ok(
+    Math.abs(zeroFreeboard.centroidX - halfMetreFreeboard.centroidX) < 35,
+    "zero freeboard should expand the same reservoir component, not rotate into the side lobe"
+  );
+  assert.ok(
+    zeroFreeboard.wetCellCount >= halfMetreFreeboard.wetCellCount,
+    "raising the water level should only expand the existing component"
+  );
+});
