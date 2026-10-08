@@ -1276,14 +1276,11 @@ export async function createScene(container: string): Promise<SceneView> {
     lastDamCrestElevation = null;
     renderPersistedDam();
 
-    await view.goTo(
-      {
-        position: fromScenarioPoint(scenario.camera.position),
-        heading: scenario.camera.heading,
-        tilt: scenario.camera.tilt
-      },
-      { animate: false }
-    );
+    const restoredCamera = view.camera.clone();
+    restoredCamera.position = fromScenarioPoint(scenario.camera.position);
+    restoredCamera.heading = scenario.camera.heading;
+    restoredCamera.tilt = scenario.camera.tilt;
+    await view.goTo(restoredCamera, { animate: false });
 
     if (damBarrier && lastBasinSeed && lastBasinSource) {
       await applyBasin(lastBasinSeed, lastBasinSource);
