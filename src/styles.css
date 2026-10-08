@@ -253,3 +253,9 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+
+.setting-row select option {
+  background: #1f252b;
+  color: #f5f7fa;
+}
