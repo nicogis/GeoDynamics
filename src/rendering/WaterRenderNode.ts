@@ -427,26 +427,48 @@ const renderVertexSource = `#version 300 es
   uniform mat4 uProjection;
   uniform mat4 uModelView;
   uniform vec2 uTexel;
+  uniform float uTime;
 
   out float vHeight;
+  out float vSurfaceMotion;
   out vec2 vUv;
   out vec3 vNormal;
 
+  float ambientWave(vec2 uv, float t) {
+    float w1 = sin(dot(uv, vec2(37.0, 21.0)) + t * 0.00115);
+    float w2 = sin(dot(uv, vec2(-18.0, 43.0)) - t * 0.00082 + 1.7);
+    float w3 = sin(dot(uv, vec2(71.0, -29.0)) + t * 0.00155 + 0.6);
+    return w1 * 0.50 + w2 * 0.32 + w3 * 0.18;
+  }
+
   void main() {
     float height = texture(uState, aUv).r;
+    float wet = texture(uMask, aUv).r;
     vUv = aUv;
+
     float left = texture(uState, aUv - vec2(uTexel.x, 0.0)).r;
     float right = texture(uState, aUv + vec2(uTexel.x, 0.0)).r;
     float down = texture(uState, aUv - vec2(0.0, uTexel.y)).r;
     float up = texture(uState, aUv + vec2(0.0, uTexel.y)).r;
 
-    vec3 p = aPosition + aUp * height;
-    vHeight = height;
+    // Purely visual background motion. Physics/overtopping still use only
+    // the simulated state texture, so this never changes hydraulic results.
+    float ambient = wet > 0.5 ? ambientWave(aUv, uTime) * 0.14 : 0.0;
+    float visualHeight = height + ambient;
 
-    // The water grid is stored in ArcGIS render coordinates. Perturb the
-    // geographic up-vector with the local east/north wave gradient so the
-    // shading stays correct even in global SceneView/ECEF coordinates.
-    vec2 slope = vec2(left - right, down - up) * 3.2;
+    vec3 p = aPosition + aUp * visualHeight;
+    vHeight = height;
+    vSurfaceMotion = ambient;
+
+    // Blend physical wave slope with small procedural surface ripples.
+    vec2 physicalSlope = vec2(left - right, down - up) * 3.2;
+    float phaseA = dot(aUv, vec2(37.0, 21.0)) + uTime * 0.00115;
+    float phaseB = dot(aUv, vec2(-18.0, 43.0)) - uTime * 0.00082 + 1.7;
+    vec2 ambientSlope =
+      vec2(cos(phaseA) * 37.0, cos(phaseA) * 21.0) * 0.006 +
+      vec2(cos(phaseB) * -18.0, cos(phaseB) * 43.0) * 0.004;
+
+    vec2 slope = physicalSlope + ambientSlope;
     vNormal = normalize(
       aUp +
       aEast * slope.x +
@@ -465,6 +487,7 @@ const renderFragmentSource = `#version 300 es
   uniform float uTime;
 
   in float vHeight;
+  in float vSurfaceMotion;
   in vec2 vUv;
   in vec3 vNormal;
   out vec4 fragColor;
@@ -497,7 +520,15 @@ const renderFragmentSource = `#version 300 es
     // external texture assets or another renderer/context.
     float rippleA = sin(vUv.x * 190.0 + uTime * 0.0017);
     float rippleB = sin(vUv.y * 157.0 - uTime * 0.0013);
-    float microRipple = (rippleA + rippleB) * 0.5;
+    float rippleC = sin((vUv.x + vUv.y) * 113.0 + uTime * 0.0011);
+    float microRipple = rippleA * 0.42 + rippleB * 0.36 + rippleC * 0.22;
+    float movingSheen =
+      0.5 +
+      0.5 * sin(
+        vUv.x * 34.0 -
+        vUv.y * 23.0 +
+        uTime * 0.00125
+      );
 
     vec3 shallowColor = vec3(0.055, 0.34, 0.40);
     vec3 deepColor = vec3(0.012, 0.075, 0.16);
@@ -520,15 +551,17 @@ const renderFragmentSource = `#version 300 es
     float foam = clamp(shorelineFoam + crestFoam, 0.0, 1.0);
 
     color += slope * vec3(0.035, 0.075, 0.09);
-    color += microRipple * 0.018;
-    color *= 0.76 + diffuse * 0.34;
-    color += specular * vec3(0.72, 0.86, 0.92);
+    color += microRipple * 0.022;
+    color += vSurfaceMotion * vec3(0.025, 0.055, 0.070);
+    color *= 0.74 + diffuse * 0.36;
+    color += specular * (0.72 + movingSheen * 0.22) * vec3(0.72, 0.86, 0.92);
     color = mix(color, vec3(0.82, 0.93, 0.94), foam * 0.72);
     color = mix(color, vec3(0.16, 0.34, 0.44), fresnel * 0.28);
 
     float alpha =
-      mix(0.66, 0.90, smoothstep(0.2, 12.0, basinDepth)) +
-      foam * 0.06;
+      mix(0.62, 0.88, smoothstep(0.2, 12.0, basinDepth)) +
+      foam * 0.07 +
+      fresnel * 0.035;
     fragColor = vec4(color, clamp(alpha, 0.62, 0.94));
   }
 `;
