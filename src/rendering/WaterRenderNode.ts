@@ -453,7 +453,7 @@ const renderVertexSource = `#version 300 es
 
     // Purely visual background motion. Physics/overtopping still use only
     // the simulated state texture, so this never changes hydraulic results.
-    float ambient = wet > 0.5 ? ambientWave(aUv, uTime) * 0.14 : 0.0;
+    float ambient = wet > 0.5 ? ambientWave(aUv, uTime) * 0.035 : 0.0;
     float visualHeight = height + ambient;
 
     vec3 p = aPosition + aUp * visualHeight;
@@ -461,12 +461,12 @@ const renderVertexSource = `#version 300 es
     vSurfaceMotion = ambient;
 
     // Blend physical wave slope with small procedural surface ripples.
-    vec2 physicalSlope = vec2(left - right, down - up) * 3.2;
+    vec2 physicalSlope = vec2(left - right, down - up) * 5.4;
     float phaseA = dot(aUv, vec2(37.0, 21.0)) + uTime * 0.00115;
     float phaseB = dot(aUv, vec2(-18.0, 43.0)) - uTime * 0.00082 + 1.7;
     vec2 ambientSlope =
-      vec2(cos(phaseA) * 37.0, cos(phaseA) * 21.0) * 0.006 +
-      vec2(cos(phaseB) * -18.0, cos(phaseB) * 43.0) * 0.004;
+      vec2(cos(phaseA) * 37.0, cos(phaseA) * 21.0) * 0.0022 +
+      vec2(cos(phaseB) * -18.0, cos(phaseB) * 43.0) * 0.0015;
 
     vec2 slope = physicalSlope + ambientSlope;
     vNormal = normalize(
@@ -506,7 +506,7 @@ const renderFragmentSource = `#version 300 es
     vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
 
     float diffuse = max(dot(normal, lightDirection), 0.0);
-    float specular = pow(max(dot(normal, halfVector), 0.0), 72.0);
+    float specular = pow(max(dot(normal, halfVector), 0.0), 96.0);
     float slope = clamp(length(normal.xy) * 1.8, 0.0, 1.0);
     float basinDepth = max(texture(uDepth, vUv).r, 0.0);
 
@@ -514,7 +514,7 @@ const renderFragmentSource = `#version 300 es
     // It is intentionally subtle because ArcGIS still owns the scene
     // illumination and render target.
     float facing = clamp(abs(normal.z), 0.0, 1.0);
-    float fresnel = pow(1.0 - facing, 3.0);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - facing, 5.0);
 
     // Procedural micro-ripples add small-scale variation without introducing
     // external texture assets or another renderer/context.
@@ -528,9 +528,10 @@ const renderFragmentSource = `#version 300 es
       rippleC * 0.22 +
       rippleD * 0.16;
 
-    vec3 shallowColor = vec3(0.055, 0.34, 0.40);
-    vec3 deepColor = vec3(0.012, 0.075, 0.16);
-    vec3 crestColor = vec3(0.46, 0.82, 0.86);
+    vec3 shallowColor = vec3(0.035, 0.27, 0.33);
+    vec3 deepColor = vec3(0.010, 0.055, 0.12);
+    vec3 crestColor = vec3(0.34, 0.68, 0.76);
+    vec3 reflectionColor = vec3(0.34, 0.47, 0.58);
 
     float depthMix = smoothstep(0.5, 18.0, basinDepth);
     vec3 color = mix(shallowColor, deepColor, depthMix);
@@ -548,18 +549,18 @@ const renderFragmentSource = `#version 300 es
     float crestFoam = positiveCrest * smoothstep(0.08, 0.42, slope);
     float foam = clamp(shorelineFoam + crestFoam, 0.0, 1.0);
 
-    color += slope * vec3(0.028, 0.060, 0.075);
-    color += microRipple * 0.010;
-    color += vSurfaceMotion * vec3(0.010, 0.022, 0.030);
-    color *= 0.78 + diffuse * 0.30;
-    color += specular * 0.42 * vec3(0.72, 0.86, 0.92);
-    color = mix(color, vec3(0.82, 0.93, 0.94), foam * 0.72);
-    color = mix(color, vec3(0.16, 0.34, 0.44), fresnel * 0.28);
+    color += slope * vec3(0.018, 0.042, 0.055);
+    color += microRipple * 0.005;
+    color += vSurfaceMotion * vec3(0.004, 0.009, 0.012);
+    color *= 0.80 + diffuse * 0.24;
+    color += specular * 0.34 * vec3(0.78, 0.88, 0.94);
+    color = mix(color, vec3(0.78, 0.90, 0.92), foam * 0.68);
+    color = mix(color, reflectionColor, fresnel * 0.46);
 
     float alpha =
-      mix(0.62, 0.88, smoothstep(0.2, 12.0, basinDepth)) +
-      foam * 0.07 +
-      fresnel * 0.035;
+      mix(0.58, 0.86, smoothstep(0.2, 12.0, basinDepth)) +
+      foam * 0.08 +
+      fresnel * 0.055;
     fragColor = vec4(color, clamp(alpha, 0.62, 0.94));
   }
 `;
