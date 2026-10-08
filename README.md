@@ -8,6 +8,26 @@
 
 > **Quick start:** use **Ctrl + click** on two points across the valley to create the dam barrier. Then use a **normal click** on the terrain to release the boulder. If the automatic upstream basin detection is not satisfactory, use **Shift + click** upstream to set the reservoir seed manually.
 
+## Demo screenshots
+
+**1. Dam barrier and terrain-aware reservoir**
+
+<p align="center">
+  <img src="docs/media/dam-reservoir.png" alt="GeoDynamics dam barrier and terrain-aware reservoir" width="900">
+</p>
+
+**2. Rockfall simulation**
+
+<p align="center">
+  <img src="docs/media/rockfall.png" alt="GeoDynamics rockfall simulation" width="900">
+</p>
+
+**3. Downstream hazard result**
+
+<p align="center">
+  <img src="docs/media/downstream-hazard.png" alt="GeoDynamics downstream hazard result" width="900">
+</p>
+
 
 GeoDynamics explores how a GIS can become an interactive simulation environment by combining ArcGIS Maps SDK for JavaScript with terrain sampling, custom WebGL2 rendering, rigid-body physics, reduced-order and experimental 2D shallow-water hydraulics, reproducible scenario persistence and GIS-native analysis outputs.
 
