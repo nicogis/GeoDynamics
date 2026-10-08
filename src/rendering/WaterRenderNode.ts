@@ -843,6 +843,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       new Uint8Array(resolution * resolution).fill(255);
 
     gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
@@ -868,6 +870,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       new Float32Array(resolution * resolution);
 
     gl.bindTexture(gl.TEXTURE_2D, this.depthTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
