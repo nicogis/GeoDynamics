@@ -511,6 +511,15 @@ export class RockfallSimulation {
     this.stopAnimation();
   }
 
+  cancel(): void {
+    this.runId += 1;
+    this.stopAnimation();
+    this.world?.free();
+    this.world = null;
+    this.body = null;
+    this.activeSettings = null;
+  }
+
   private stopAnimation(): void {
     if (this.frameId !== null) {
       cancelAnimationFrame(this.frameId);
