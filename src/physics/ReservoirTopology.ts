@@ -13,6 +13,7 @@ export interface ReservoirTopologyInput {
   seedY: number;
   dam: ReservoirDamLine;
   waterElevation: number;
+  connectivityElevation?: number;
 }
 
 export interface ReservoirTopologyResult {
@@ -70,7 +71,8 @@ export function buildConnectedReservoirMask(
     seedX,
     seedY,
     dam,
-    waterElevation
+    waterElevation,
+    connectivityElevation = waterElevation
   } = input;
 
   if (elevations.length !== resolution * resolution) {
@@ -102,7 +104,7 @@ export function buildConnectedReservoirMask(
       const index = row * resolution + col;
       const elevation = elevations[index];
 
-      if (!Number.isFinite(elevation) || elevation > waterElevation) {
+      if (!Number.isFinite(elevation) || elevation > connectivityElevation) {
         continue;
       }
 
