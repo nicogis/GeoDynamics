@@ -133,6 +133,7 @@ export async function simulateDownstreamSwe2D(
 
   const state = createSwe2DState(count);
   const maxDepth = new Float32Array(count);
+  const previousDepth = new Float64Array(count);
   const maxVelocity = new Float32Array(count);
   const arrivalTime = new Float32Array(count);
   arrivalTime.fill(-1);
@@ -205,6 +206,8 @@ export async function simulateDownstreamSwe2D(
       break;
     }
 
+    previousDepth.set(state.h);
+
     const diagnostics = advanceSwe2D(state, grid, {
       gravity: GRAVITY,
       cfl: 0.32,
@@ -240,8 +243,11 @@ export async function simulateDownstreamSwe2D(
 
     for (let i = 0; i < count; i += 1) {
       const h = state.h[i];
+      maxDepthChange = Math.max(
+        maxDepthChange,
+        Math.abs(h - previousDepth[i])
+      );
       if (h > maxDepth[i]) {
-        maxDepthChange = Math.max(maxDepthChange, h - maxDepth[i]);
         maxDepth[i] = h;
       }
 
@@ -405,8 +411,6 @@ export async function simulateDownstreamSwe2D(
     domainExpansionCount: 0,
     domainMarginM: DOMAIN_MARGIN_M,
     stopReason,
-    frontStillAdvancing:
-      stopReason !== "converged" &&
-      stopReason !== "domain-boundary-reached"
+    frontStillAdvancing: stopReason !== "converged"
   };
 }
