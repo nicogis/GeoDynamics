@@ -3,10 +3,15 @@ import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 
 import type { SimulationSettings } from "../config/SimulationSettings";
+import {
+  buildConnectedReservoirMask,
+  sideOfDamLine
+} from "./ReservoirTopology";
 
 const MIN_RESOLUTION = 128;
 const ELEVATION_BATCH_SIZE = 16384;
 const DOMAIN_MARGIN = 180;
+const TOPOLOGY_ELEVATION_EPSILON_M = 0.08;
 
 export interface DamBarrier {
   start: Point;
@@ -82,10 +87,7 @@ function sideOfLine(
   y: number,
   dam: DamBarrier
 ): number {
-  return (
-    (dam.end.x - dam.start.x) * (y - dam.start.y) -
-    (dam.end.y - dam.start.y) * (x - dam.start.x)
-  );
+  return sideOfDamLine(x, y, dam);
 }
 
 function nextPowerOfTwo(value: number): number {
@@ -602,183 +604,27 @@ async function sampleConnectedMask(
     center.spatialReference
   );
 
-  const candidate = new Uint8Array(resolution * resolution);
-  const seedSide = sideOfLine(seed.x, seed.y, dam);
+  const topology = buildConnectedReservoirMask({
+    elevations,
+    centerX: center.x,
+    centerY: center.y,
+    size,
+    resolution,
+    seedX: seed.x,
+    seedY: seed.y,
+    dam,
+    waterElevation,
+    connectivityElevation:
+      waterElevation - TOPOLOGY_ELEVATION_EPSILON_M
+  });
 
-  if (Math.abs(seedSide) < 0.001) {
-    throw new Error("Place the reservoir seed clearly upstream from the dam.");
-  }
-
-  for (let row = 0; row < resolution; row += 1) {
-    const y = center.y - half + (row + 0.5) * step;
-
-    for (let col = 0; col < resolution; col += 1) {
-      const index = row * resolution + col;
-      const elevation = elevations[index];
-
-      if (
-        elevation === undefined ||
-        !Number.isFinite(elevation) ||
-        elevation > waterElevation
-      ) {
-        continue;
-      }
-
-      const x = center.x - half + (col + 0.5) * step;
-      const cellSide = sideOfLine(x, y, dam);
-      const damDx = dam.end.x - dam.start.x;
-      const damDy = dam.end.y - dam.start.y;
-      const damLength = Math.hypot(damDx, damDy);
-      const distanceToDam =
-        damLength > 0 ? Math.abs(cellSide) / damLength : Number.POSITIVE_INFINITY;
-
-      // Keep only the upstream half-plane and leave a narrow dry strip at the
-      // dam itself. The rendered dam face fills this strip and the water mask
-      // cannot bleed one cell into the downstream side.
-      if (cellSide * seedSide > 0 && distanceToDam > step * 0.6) {
-        candidate[index] = 255;
-      }
-    }
-  }
-
-  const seedCol = Math.floor(
-    (seed.x - (center.x - half)) / step
-  );
-  const seedRow = Math.floor(
-    (seed.y - (center.y - half)) / step
-  );
-
-  if (
-    seedCol < 0 ||
-    seedCol >= resolution ||
-    seedRow < 0 ||
-    seedRow >= resolution
-  ) {
-    throw new Error("The reservoir seed is outside the sampled domain.");
-  }
-
-  const seedIndex = seedRow * resolution + seedCol;
-
-  if (candidate[seedIndex] === 0) {
-    throw new Error(
-      "The upstream seed is above the reservoir level. Move it lower in the valley."
-    );
-  }
-
-  const mask = new Uint8Array(candidate.length);
-  const queue = new Int32Array(candidate.length);
-  let head = 0;
-  let tail = 0;
-
-  queue[tail++] = seedIndex;
-  mask[seedIndex] = 255;
-
-  while (head < tail) {
-    const index = queue[head++];
-    const row = Math.floor(index / resolution);
-    const col = index % resolution;
-
-    const tryAdd = (r: number, c: number) => {
-      if (r < 0 || r >= resolution || c < 0 || c >= resolution) {
-        return;
-      }
-
-      const neighbor = r * resolution + c;
-      if (candidate[neighbor] === 0 || mask[neighbor] !== 0) {
-        return;
-      }
-
-      mask[neighbor] = 255;
-      queue[tail++] = neighbor;
-    };
-
-    tryAdd(row - 1, col);
-    tryAdd(row + 1, col);
-    tryAdd(row, col - 1);
-    tryAdd(row, col + 1);
-
-    // Permit a diagonal only when at least one orthogonal bridge cell is
-    // itself a valid wet candidate. This preserves narrow diagonal valleys
-    // without allowing corner-only connections to jump across a ridge and
-    // select a rotated or spurious reservoir component.
-    const tryAddDiagonal = (
-      r: number,
-      c: number,
-      bridgeA: number,
-      bridgeB: number
-    ) => {
-      if (r < 0 || r >= resolution || c < 0 || c >= resolution) {
-        return;
-      }
-
-      if (
-        candidate[bridgeA] === 0 &&
-        candidate[bridgeB] === 0
-      ) {
-        return;
-      }
-
-      tryAdd(r, c);
-    };
-
-    const up = row > 0 ? (row - 1) * resolution + col : index;
-    const down =
-      row < resolution - 1 ? (row + 1) * resolution + col : index;
-    const left = col > 0 ? row * resolution + col - 1 : index;
-    const right =
-      col < resolution - 1 ? row * resolution + col + 1 : index;
-
-    tryAddDiagonal(row - 1, col - 1, up, left);
-    tryAddDiagonal(row - 1, col + 1, up, right);
-    tryAddDiagonal(row + 1, col - 1, down, left);
-    tryAddDiagonal(row + 1, col + 1, down, right);
-  }
-
-  let wetCellCount = 0;
+  const depth = new Float32Array(topology.mask.length);
   let volumeM3 = 0;
   let maxDepth = 0;
-  let minWetDistanceToDam = Number.POSITIVE_INFINITY;
-  let nearDamContactCells = 0;
-  let nearDamMinT = Number.POSITIVE_INFINITY;
-  let nearDamMaxT = Number.NEGATIVE_INFINITY;
-  const depth = new Float32Array(mask.length);
-  const damDx = dam.end.x - dam.start.x;
-  const damDy = dam.end.y - dam.start.y;
-  const damLengthSquared = damDx * damDx + damDy * damDy;
-  const nearDamTolerance = Math.max(step * 3, 35);
 
-  for (let i = 0; i < mask.length; i += 1) {
-    if (mask[i] === 0) {
+  for (let i = 0; i < topology.mask.length; i += 1) {
+    if (topology.mask[i] === 0) {
       continue;
-    }
-
-    wetCellCount += 1;
-
-    const row = Math.floor(i / resolution);
-    const col = i % resolution;
-    const x = center.x - half + (col + 0.5) * step;
-    const y = center.y - half + (row + 0.5) * step;
-    const damSide = sideOfLine(x, y, dam);
-    const damLength = Math.sqrt(damLengthSquared);
-    if (damLength > 0) {
-      const distanceToDam = Math.abs(damSide) / damLength;
-      minWetDistanceToDam = Math.min(
-        minWetDistanceToDam,
-        distanceToDam
-      );
-
-      if (distanceToDam <= nearDamTolerance) {
-        const t =
-          ((x - dam.start.x) * damDx +
-            (y - dam.start.y) * damDy) /
-          damLengthSquared;
-
-        if (t >= -0.15 && t <= 1.15) {
-          nearDamContactCells += 1;
-          nearDamMinT = Math.min(nearDamMinT, t);
-          nearDamMaxT = Math.max(nearDamMaxT, t);
-        }
-      }
     }
 
     const terrainElevation = elevations[i];
@@ -791,51 +637,17 @@ async function sampleConnectedMask(
     }
   }
 
-  if (wetCellCount < 4) {
-    throw new Error(
-      "The selected reservoir component is too small or disconnected."
-    );
-  }
-
-  if (
-    !Number.isFinite(minWetDistanceToDam) ||
-    minWetDistanceToDam > nearDamTolerance
-  ) {
-    throw new Error(
-      "The selected water body is not connected to the dam. Choose a seed in the valley immediately upstream."
-    );
-  }
-
-  if (
-    nearDamContactCells < 2 ||
-    !Number.isFinite(nearDamMinT) ||
-    !Number.isFinite(nearDamMaxT)
-  ) {
-    throw new Error(
-      "The reservoir component does not make a stable contact with the dam profile."
-    );
-  }
-
-  // Reject components that only graze a remote dam extension. A valid
-  // reservoir should contact the actual barrier span, not wrap around an
-  // abutment or connect through a concave side branch.
-  if (nearDamMaxT < 0 || nearDamMinT > 1) {
-    throw new Error(
-      "The reservoir contacts the dam outside the barrier span. Reposition the dam or choose another upstream seed."
-    );
-  }
-
   return {
-    mask,
+    mask: topology.mask,
     depth,
     maxDepth,
-    wetCellCount,
-    touchesBoundary: touchesMaskBoundary(mask, resolution),
-    areaM2: wetCellCount * cellArea,
+    wetCellCount: topology.wetCellCount,
+    touchesBoundary: topology.touchesBoundary,
+    areaM2: topology.wetCellCount * cellArea,
     volumeM3,
-    nearDamContactCells,
-    nearDamMinT,
-    nearDamMaxT
+    nearDamContactCells: topology.nearDamContactCells,
+    nearDamMinT: topology.nearDamMinT,
+    nearDamMaxT: topology.nearDamMaxT
   };
 }
 
