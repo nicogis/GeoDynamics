@@ -202,6 +202,8 @@ export async function createScene(container: string): Promise<SceneView> {
   let lastBasinSeed: Point | null = null;
   let lastBasinSource: BasinSource | null = null;
   let basinRegenerationTimer: number | null = null;
+  let basinRunInProgress = false;
+  let pendingBasinRegeneration = false;
   let lastDownstreamRaster: DownstreamShallowWaterResult | null = null;
   let rasterMetric: DownstreamRasterMetric = "depth";
   let rasterOpacity = 0.65;
@@ -489,13 +491,26 @@ export async function createScene(container: string): Promise<SceneView> {
         : "Sampling reservoir behind dam barrier..."
     );
 
-    const basin = await sampleWaterBasin(
-      view,
-      frozenSeed,
-      frozenDam,
-      frozenSettings,
-      { trustSeedSide: source === "manual" }
-    );
+    basinRunInProgress = true;
+    const basin = await (async () => {
+      try {
+        return await sampleWaterBasin(
+          view,
+          frozenSeed,
+          frozenDam,
+          frozenSettings,
+          { trustSeedSide: source === "manual" }
+        );
+      } finally {
+        if (requestId === basinRequestId) {
+          basinRunInProgress = false;
+          if (pendingBasinRegeneration) {
+            pendingBasinRegeneration = false;
+            window.setTimeout(() => scheduleBasinRegeneration(), 0);
+          }
+        }
+      }
+    })();
 
     if (requestId !== basinRequestId) {
       return;
@@ -1318,6 +1333,14 @@ export async function createScene(container: string): Promise<SceneView> {
       return;
     }
 
+    if (basinRunInProgress) {
+      pendingBasinRegeneration = true;
+      writeHelp(
+        "Reservoir parameters changed. Current basin run keeps its frozen inputs; regeneration will start afterwards."
+      );
+      return;
+    }
+
     if (basinRegenerationTimer !== null) {
       window.clearTimeout(basinRegenerationTimer);
     }
@@ -1373,10 +1396,6 @@ export async function createScene(container: string): Promise<SceneView> {
       const value = Math.min(Math.max(parsed, min), max);
       input.value = String(value);
       settings[key] = value;
-
-      if (key === "rockRadius") {
-        rockNode.setRadius(value);
-      }
 
       if (reservoirSettingKeys.has(key)) {
         scheduleBasinRegeneration();
