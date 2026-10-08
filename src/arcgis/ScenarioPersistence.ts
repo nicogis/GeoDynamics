@@ -1,4 +1,5 @@
 import type { SimulationSettings } from "../config/SimulationSettings";
+import { SCENARIO_SCHEMA_VERSION } from "../config/ReleaseInfo";
 import type { DownstreamRasterMetric } from "./DownstreamRasterVisualization";
 
 export type DownstreamSolverMode = "reduced" | "swe2d";
@@ -19,6 +20,7 @@ export interface ScenarioCamera {
 export interface GeoDynamicsScenario {
   schema: "geodynamics-scenario";
   version: 1;
+  engineVersion?: string;
   savedAt: string;
   camera: ScenarioCamera;
   settings: SimulationSettings;
@@ -100,7 +102,8 @@ export async function readScenarioJson(file: File): Promise<GeoDynamicsScenario>
 
   if (
     parsed.schema !== "geodynamics-scenario" ||
-    parsed.version !== 1 ||
+    parsed.version !== SCENARIO_SCHEMA_VERSION ||
+    (parsed.engineVersion !== undefined && typeof parsed.engineVersion !== "string") ||
     typeof parsed.savedAt !== "string" ||
     !camera ||
     !isPoint(camera.position) ||

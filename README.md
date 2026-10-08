@@ -2,6 +2,16 @@
 
 **Experimental geospatial physics simulations on real-world 3D terrain.**
 
+**Release target:** GeoDynamics 1.0.0
+
+**Live demo:** GitHub Pages deployment is included in the release workflow and will be available at `https://nicogis.github.io/GeoDynamics/` once Pages is enabled for GitHub Actions.
+
+<p align="center">
+  <img src="docs/media/geodynamics-demo.gif" alt="GeoDynamics demo" width="900">
+</p>
+
+<p align="center"><em>GeoDynamics live simulation.</em></p>
+
 GeoDynamics explores how a GIS can become an interactive simulation environment by combining ArcGIS Maps SDK for JavaScript with terrain sampling, custom WebGL2 rendering, rigid-body physics, reduced-order and experimental 2D shallow-water hydraulics, reproducible scenario persistence and GIS-native analysis outputs.
 
 ## Vision
@@ -105,6 +115,8 @@ GeoDynamics scenarios can be saved to and restored from JSON. The versioned sche
 - downstream raster metric and opacity.
 
 Scenario loading validates the nested JSON before applying it, cancels active rockfall work, clears transient reservoir/downstream state, restores the camera and then deterministically regenerates the saved reservoir. This is primarily intended for reproducing camera-, terrain- and geometry-sensitive test cases while development continues.
+
+Scenarios saved by the 1.0.0 release also include an `engineVersion` field. The field is optional when loading, so JSON scenarios created by earlier development builds remain compatible with schema version 1.
 
 ## Physical coordinate systems
 
@@ -212,6 +224,18 @@ The current experimental classes are:
 These classes are an experimental visualization aid, not a regulatory flood-risk classification.
 
 A WGS84 GeoJSON export is available for downstream hazard cells.
+
+## GitHub Pages deployment
+
+The repository includes a GitHub Actions workflow that builds and deploys `dist` to GitHub Pages on every push to `main`.
+
+The Vite configuration uses relative asset paths, so the application can run below the repository path:
+
+```text
+https://nicogis.github.io/GeoDynamics/
+```
+
+GitHub Pages must be configured to use **GitHub Actions** as its source. The deployment workflow runs the test suite before publishing and uploads only the generated `dist` artifact; the build output is not committed to `main`.
 
 ## Run locally
 
