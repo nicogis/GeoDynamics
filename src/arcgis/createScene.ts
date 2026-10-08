@@ -28,6 +28,7 @@ import {
   simulateDownstreamShallowWater,
   type DownstreamShallowWaterResult
 } from "../physics/DownstreamShallowWater";
+import { simulateDownstreamSwe2D } from "../physics/DownstreamSwe2D";
 import {
   getDownstreamRasterLegend,
   renderDownstreamRaster,
@@ -132,6 +133,9 @@ export async function createScene(container: string): Promise<SceneView> {
   const help = document.querySelector<HTMLDivElement>("#help");
   const overtopping = document.querySelector<HTMLDivElement>("#overtopping");
   const downstream = document.querySelector<HTMLDivElement>("#downstream");
+  const downstreamSolverMode = document.querySelector<HTMLSelectElement>(
+    "#downstreamSolverMode"
+  );
   const downstreamRasterMetric = document.querySelector<HTMLSelectElement>(
     "#downstreamRasterMetric"
   );
@@ -538,12 +542,27 @@ export async function createScene(container: string): Promise<SceneView> {
                     overtoppingPeakWidthFraction > 0
                       ? damLengthM * overtoppingPeakWidthFraction
                       : undefined;
-                  shallowWater = await simulateDownstreamShallowWater(
-                    view,
-                    flow,
-                    overtoppingHead,
-                    measuredOverflowWidthM
-                  );
+                  const useSwe2D =
+                    downstreamSolverMode?.value === "swe2d";
+                  if (downstream) {
+                    downstream.textContent = useSwe2D
+                      ? "Downstream: running experimental SWE 2D solver..."
+                      : "Downstream: running reduced-order raster solver...";
+                  }
+
+                  shallowWater = useSwe2D
+                    ? await simulateDownstreamSwe2D(
+                        view,
+                        flow,
+                        overtoppingHead,
+                        measuredOverflowWidthM
+                      )
+                    : await simulateDownstreamShallowWater(
+                        view,
+                        flow,
+                        overtoppingHead,
+                        measuredOverflowWidthM
+                      );
                   lastDownstreamRaster = shallowWater;
                   refreshDownstreamRaster();
                 } catch (solverError: unknown) {
@@ -767,7 +786,7 @@ export async function createScene(container: string): Promise<SceneView> {
 
                   if (shallowWater) {
                     writeHelp(
-                      `Downstream raster foundation — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · residual ${shallowWater.massBalanceResidualM3.toFixed(2)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(3)}% · hydrograph error ${shallowWater.hydrographVolumeErrorPct.toFixed(3)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s / ${shallowWater.simulationBlocks} blocks · front ${shallowWater.frontDistanceM.toFixed(0)} m @ ${shallowWater.frontSpeedMs.toFixed(2)} m/s · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
+                      `Downstream ${downstreamSolverMode?.value === "swe2d" ? "SWE 2D experimental" : "reduced-order"} — wet ${(shallowWater.wetAreaM2 / 10_000).toFixed(2)} ha · solver head ${shallowWater.overtoppingHeadM.toFixed(2)} m · Qpeak ${shallowWater.peakDischargeM3s.toFixed(1)} m³/s · input ${shallowWater.inputVolumeM3.toFixed(0)} m³ · stored ${shallowWater.storedVolumeM3.toFixed(0)} m³ · out ${shallowWater.outflowVolumeM3.toFixed(0)} m³ · residual ${shallowWater.massBalanceResidualM3.toFixed(2)} m³ · mass error ${shallowWater.massBalanceErrorPct.toFixed(3)}% · hydrograph error ${shallowWater.hydrographVolumeErrorPct.toFixed(3)}% · max downstream depth ${shallowWater.peakDepthM.toFixed(2)} m · peak velocity ${shallowWater.peakVelocityMs.toFixed(2)} m/s · latest arrival ${shallowWater.maxArrivalTimeS.toFixed(1)} s · simulated ${shallowWater.simulatedDurationS.toFixed(0)} s / ${shallowWater.simulationBlocks} blocks · front ${shallowWater.frontDistanceM.toFixed(0)} m @ ${shallowWater.frontSpeedMs.toFixed(2)} m/s · ${shallowWater.stopReason}${shallowWater.frontStillAdvancing ? " · front still advancing" : ""} · cell ${shallowWater.cellSize.toFixed(1)} m.`
                     );
                   } else {
                     writeHelp(
