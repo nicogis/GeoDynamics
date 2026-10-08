@@ -6,6 +6,8 @@
 
 **Live demo:** https://nicogis.github.io/GeoDynamics/
 
+> **Quick start:** use **Ctrl + click** on two points across the valley to create the dam barrier. Then use a **normal click** on the terrain to release the boulder. If the automatic upstream basin detection is not satisfactory, use **Shift + click** upstream to set the reservoir seed manually.
+
 
 GeoDynamics explores how a GIS can become an interactive simulation environment by combining ArcGIS Maps SDK for JavaScript with terrain sampling, custom WebGL2 rendering, rigid-body physics, reduced-order and experimental 2D shallow-water hydraulics, reproducible scenario persistence and GIS-native analysis outputs.
 
