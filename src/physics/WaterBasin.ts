@@ -11,6 +11,7 @@ import {
 const MIN_RESOLUTION = 128;
 const ELEVATION_BATCH_SIZE = 16384;
 const DOMAIN_MARGIN = 180;
+const TOPOLOGY_ELEVATION_EPSILON_M = 0.08;
 
 export interface DamBarrier {
   start: Point;
@@ -612,7 +613,9 @@ async function sampleConnectedMask(
     seedX: seed.x,
     seedY: seed.y,
     dam,
-    waterElevation
+    waterElevation,
+    connectivityElevation:
+      waterElevation - TOPOLOGY_ELEVATION_EPSILON_M
   });
 
   const depth = new Float32Array(topology.mask.length);
