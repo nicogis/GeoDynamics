@@ -1191,7 +1191,8 @@ export async function createScene(container: string): Promise<SceneView> {
 
     return {
       schema: "geodynamics-scenario",
-      version: 1,
+      version: SCENARIO_SCHEMA_VERSION,
+      engineVersion: GEODYNAMICS_VERSION,
       savedAt: new Date().toISOString(),
       camera: {
         position: toScenarioPoint(camera.position),
