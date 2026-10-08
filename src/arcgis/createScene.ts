@@ -39,6 +39,14 @@ import {
   downloadHazardGeoJson,
   summarizeFloodHazard
 } from "./HazardOutputs";
+import {
+  downloadScenarioJson,
+  readScenarioJson,
+  type BasinSource,
+  type DownstreamSolverMode,
+  type GeoDynamicsScenario,
+  type ScenarioPoint
+} from "./ScenarioPersistence";
 
 export async function createScene(container: string): Promise<SceneView> {
   const trajectoryLayer = new GraphicsLayer({
@@ -152,6 +160,15 @@ export async function createScene(container: string): Promise<SceneView> {
   const exportHazardGeoJson = document.querySelector<HTMLButtonElement>(
     "#exportHazardGeoJson"
   );
+  const saveScenarioJson = document.querySelector<HTMLButtonElement>(
+    "#saveScenarioJson"
+  );
+  const loadScenarioJson = document.querySelector<HTMLButtonElement>(
+    "#loadScenarioJson"
+  );
+  const loadScenarioJsonFile = document.querySelector<HTMLInputElement>(
+    "#loadScenarioJsonFile"
+  );
   const writeStatus = (
     message: string,
     kind: "normal" | "error" = "normal"
@@ -185,7 +202,6 @@ export async function createScene(container: string): Promise<SceneView> {
   let lastDownstreamRaster: DownstreamShallowWaterResult | null = null;
   let rasterMetric: DownstreamRasterMetric = "depth";
   let rasterOpacity = 0.65;
-  type DownstreamSolverMode = "reduced" | "swe2d";
   interface FrozenDownstreamEvent {
     flow: DownstreamFlowPath;
     overtoppingHeadM: number;
@@ -1072,6 +1088,213 @@ export async function createScene(container: string): Promise<SceneView> {
       "Ctrl+click twice to draw a new dam. The reservoir is generated automatically when the upstream side can be detected. Shift+click upstream only as a manual fallback."
     );
   };
+
+  const toScenarioPoint = (point: Point): ScenarioPoint => ({
+    x: point.x,
+    y: point.y,
+    ...(point.z !== undefined && Number.isFinite(point.z) ? { z: point.z } : {})
+  });
+
+  const fromScenarioPoint = (point: ScenarioPoint): Point =>
+    new Point({
+      x: point.x,
+      y: point.y,
+      z: point.z,
+      spatialReference: view.spatialReference
+    });
+
+  const syncSettingsControls = () => {
+    const numericKeys: Array<keyof typeof settings> = [
+      "reservoirFreeboard",
+      "maxBasinExtent",
+      "targetDemCellSize",
+      "rockRadius",
+      "rockDensity",
+      "releaseHeight",
+      "waterDragRate"
+    ];
+
+    for (const key of numericKeys) {
+      const input = document.querySelector<HTMLInputElement>(`#${key}`);
+      if (input) {
+        input.value = String(settings[key]);
+      }
+    }
+
+    const maxResolution = document.querySelector<HTMLSelectElement>(
+      "#maxBasinResolution"
+    );
+    if (maxResolution) {
+      maxResolution.value = String(settings.maxBasinResolution);
+    }
+
+    rockNode.setRadius(settings.rockRadius);
+  };
+
+  const renderPersistedDam = () => {
+    damLayer.removeAll();
+    damGroundPreviewLayer.removeAll();
+    damFaceLayer.removeAll();
+    damPreviewGraphic = null;
+    damGroundPreviewGraphic = null;
+
+    if (!damBarrier) {
+      return;
+    }
+
+    const damLine = new Polyline({
+      spatialReference: view.spatialReference,
+      paths: [[
+        [damBarrier.start.x, damBarrier.start.y, damBarrier.start.z ?? 0],
+        [damBarrier.end.x, damBarrier.end.y, damBarrier.end.z ?? 0]
+      ]]
+    });
+
+    damLayer.add(
+      new Graphic({
+        geometry: damLine,
+        symbol: new SimpleLineSymbol({
+          color: [255, 170, 0, 0.95],
+          width: 5
+        })
+      })
+    );
+  };
+
+  const buildScenario = (): GeoDynamicsScenario => {
+    const camera = view.camera;
+
+    return {
+      schema: "geodynamics-scenario",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      camera: {
+        position: toScenarioPoint(camera.position),
+        heading: camera.heading,
+        tilt: camera.tilt
+      },
+      settings: { ...settings },
+      dam: damBarrier
+        ? {
+            start: toScenarioPoint(damBarrier.start),
+            end: toScenarioPoint(damBarrier.end)
+          }
+        : null,
+      basin:
+        lastBasinSeed && lastBasinSource
+          ? {
+              seed: toScenarioPoint(lastBasinSeed),
+              source: lastBasinSource
+            }
+          : null,
+      downstream: {
+        solver: getSelectedDownstreamSolverMode(),
+        metric: rasterMetric,
+        opacity: rasterOpacity
+      }
+    };
+  };
+
+  const loadScenario = async (scenario: GeoDynamicsScenario) => {
+    basinRequestId += 1;
+    downstreamTraceGeneration += 1;
+    downstreamSolverRunId += 1;
+    frozenDownstreamEvent = null;
+    downstreamTraceStarted = false;
+    lastDownstreamRaster = null;
+    downstreamLayer.removeAll();
+    downstreamRasterLayer.removeAll();
+    refreshDownstreamRaster();
+    trajectoryLayer.removeAll();
+    resultLayer.removeAll();
+    trajectoryGraphic = null;
+    waterNode.resetDynamics();
+
+    Object.assign(settings, scenario.settings);
+    syncSettingsControls();
+
+    rasterMetric = scenario.downstream.metric;
+    rasterOpacity = Math.min(Math.max(scenario.downstream.opacity, 0.1), 1);
+
+    if (downstreamSolverMode) {
+      downstreamSolverMode.value = scenario.downstream.solver;
+    }
+    if (downstreamRasterMetric) {
+      downstreamRasterMetric.value = rasterMetric;
+    }
+    if (downstreamRasterOpacity) {
+      downstreamRasterOpacity.value = String(rasterOpacity);
+    }
+
+    damStart = null;
+    damBarrier = scenario.dam
+      ? {
+          start: fromScenarioPoint(scenario.dam.start),
+          end: fromScenarioPoint(scenario.dam.end)
+        }
+      : null;
+    lastBasinSeed = scenario.basin
+      ? fromScenarioPoint(scenario.basin.seed)
+      : null;
+    lastBasinSource = scenario.basin?.source ?? null;
+    lastDamProfilePoints = null;
+    lastDamCrestElevation = null;
+    renderPersistedDam();
+
+    await view.goTo(
+      {
+        position: fromScenarioPoint(scenario.camera.position),
+        heading: scenario.camera.heading,
+        tilt: scenario.camera.tilt
+      },
+      { animate: false }
+    );
+
+    if (damBarrier && lastBasinSeed && lastBasinSource) {
+      await applyBasin(lastBasinSeed, lastBasinSource);
+      writeStatus("Scenario loaded. Reservoir regenerated from saved JSON.");
+    } else {
+      writeStatus("Scenario loaded.");
+      writeHelp(
+        "Scenario restored from JSON. No persisted reservoir was available to regenerate."
+      );
+    }
+  };
+
+  if (saveScenarioJson) {
+    saveScenarioJson.addEventListener("click", () => {
+      downloadScenarioJson(buildScenario());
+      writeHelp(
+        "Scenario JSON saved with camera, simulation parameters, dam, reservoir seed and downstream display settings."
+      );
+    });
+  }
+
+  if (loadScenarioJson && loadScenarioJsonFile) {
+    loadScenarioJson.addEventListener("click", () => {
+      loadScenarioJsonFile.value = "";
+      loadScenarioJsonFile.click();
+    });
+
+    loadScenarioJsonFile.addEventListener("change", () => {
+      const file = loadScenarioJsonFile.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      void readScenarioJson(file)
+        .then(loadScenario)
+        .catch((error: unknown) => {
+          console.error("Scenario import failed:", error);
+          writeStatus(
+            error instanceof Error
+              ? `Scenario import failed: ${error.message}`
+              : "Scenario import failed.",
+            "error"
+          );
+        });
+    });
+  }
 
   const reservoirSettingKeys = new Set<keyof typeof settings>([
     "reservoirFreeboard",
