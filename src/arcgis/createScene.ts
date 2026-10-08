@@ -317,20 +317,38 @@ export async function createScene(container: string): Promise<SceneView> {
     }
 
     try {
-      const result =
-        mode === "swe2d"
-          ? await simulateDownstreamSwe2D(
-              view,
-              event.flow,
-              event.overtoppingHeadM,
-              event.measuredOverflowWidthM
-            )
-          : await simulateDownstreamShallowWater(
-              view,
-              event.flow,
-              event.overtoppingHeadM,
-              event.measuredOverflowWidthM
-            );
+      let effectiveMode = mode;
+      let result: DownstreamShallowWaterResult;
+
+      if (mode === "swe2d") {
+        try {
+          result = await simulateDownstreamSwe2D(
+            view,
+            event.flow,
+            event.overtoppingHeadM,
+            event.measuredOverflowWidthM
+          );
+        } catch (sweError: unknown) {
+          console.warn(
+            "SWE 2D downstream solver failed; falling back to reduced-order:",
+            sweError
+          );
+          effectiveMode = "reduced";
+          result = await simulateDownstreamShallowWater(
+            view,
+            event.flow,
+            event.overtoppingHeadM,
+            event.measuredOverflowWidthM
+          );
+        }
+      } else {
+        result = await simulateDownstreamShallowWater(
+          view,
+          event.flow,
+          event.overtoppingHeadM,
+          event.measuredOverflowWidthM
+        );
+      }
 
       if (
         runId !== downstreamSolverRunId ||
@@ -343,12 +361,12 @@ export async function createScene(container: string): Promise<SceneView> {
       refreshDownstreamRaster();
 
       writeHelp(
-        `Downstream ${formatDownstreamSolverLabel(mode)} — frozen input head ${event.overtoppingHeadM.toFixed(2)} m · width ${(event.measuredOverflowWidthM ?? result.effectiveOverflowWidthM).toFixed(1)} m · Qpeak ${result.peakDischargeM3s.toFixed(1)} m³/s · input ${result.inputVolumeM3.toFixed(0)} m³ · wet ${(result.wetAreaM2 / 10_000).toFixed(2)} ha · max depth ${result.peakDepthM.toFixed(2)} m · peak velocity ${result.peakVelocityMs.toFixed(2)} m/s · mass error ${result.massBalanceErrorPct.toFixed(3)}% · ${result.stopReason}${result.frontStillAdvancing ? " · front still advancing" : ""}.`
+        `Downstream ${formatDownstreamSolverLabel(effectiveMode)} — frozen input head ${event.overtoppingHeadM.toFixed(2)} m · width ${(event.measuredOverflowWidthM ?? result.effectiveOverflowWidthM).toFixed(1)} m · Qpeak ${result.peakDischargeM3s.toFixed(1)} m³/s · input ${result.inputVolumeM3.toFixed(0)} m³ · wet ${(result.wetAreaM2 / 10_000).toFixed(2)} ha · max depth ${result.peakDepthM.toFixed(2)} m · peak velocity ${result.peakVelocityMs.toFixed(2)} m/s · mass error ${result.massBalanceErrorPct.toFixed(3)}% · ${result.stopReason}${result.frontStillAdvancing ? " · front still advancing" : ""}.`
       );
 
       if (downstream) {
         downstream.textContent =
-          `Downstream: ${formatDownstreamSolverLabel(mode)} A/B result — ${result.resolutionX}×${result.resolutionY} · wet ${(result.wetAreaM2 / 10_000).toFixed(2)} ha · head ${event.overtoppingHeadM.toFixed(2)} m · overflow ${result.effectiveOverflowWidthM.toFixed(0)} m · input ${result.inputVolumeM3.toFixed(0)} m³ · ${result.stopReason}${result.frontStillAdvancing ? " / front advancing" : ""}.`;
+          `Downstream: ${formatDownstreamSolverLabel(effectiveMode)} A/B result — ${result.resolutionX}×${result.resolutionY} · wet ${(result.wetAreaM2 / 10_000).toFixed(2)} ha · head ${event.overtoppingHeadM.toFixed(2)} m · overflow ${result.effectiveOverflowWidthM.toFixed(0)} m · input ${result.inputVolumeM3.toFixed(0)} m³ · ${result.stopReason}${result.frontStillAdvancing ? " / front advancing" : ""}.`;
         downstream.dataset.state = "active";
       }
 
