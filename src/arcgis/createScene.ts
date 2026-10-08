@@ -19,7 +19,10 @@ import {
 import { createRockRenderNode } from "../rendering/RockRenderNode";
 import { createWaterRenderNode } from "../rendering/WaterRenderNode";
 import { RockfallSimulation } from "../simulation/RockfallSimulation";
-import { createSimulationSettings } from "../config/SimulationSettings";
+import {
+  createSimulationSettings,
+  type SimulationSettings
+} from "../config/SimulationSettings";
 import {
   buildDownstreamInundationSurface,
   traceDownstreamFlow,
@@ -455,7 +458,14 @@ export async function createScene(container: string): Promise<SceneView> {
       return;
     }
 
-    lastBasinSeed = seed.clone();
+    const frozenSeed = seed.clone();
+    const frozenDam: DamBarrier = {
+      start: damBarrier.start.clone(),
+      end: damBarrier.end.clone()
+    };
+    const frozenSettings: SimulationSettings = { ...settings };
+
+    lastBasinSeed = frozenSeed.clone();
     lastBasinSource = source;
 
     const requestId = ++basinRequestId;
@@ -481,9 +491,9 @@ export async function createScene(container: string): Promise<SceneView> {
 
     const basin = await sampleWaterBasin(
       view,
-      seed,
-      damBarrier,
-      settings,
+      frozenSeed,
+      frozenDam,
+      frozenSettings,
       { trustSeedSide: source === "manual" }
     );
 
@@ -511,8 +521,8 @@ export async function createScene(container: string): Promise<SceneView> {
     }
 
     waterNode.setDamMonitor(
-      damBarrier.start,
-      damBarrier.end,
+      frozenDam.start,
+      frozenDam.end,
       basin.damCrestElevation,
       (state) => {
         if (!overtopping) {
@@ -555,7 +565,7 @@ export async function createScene(container: string): Promise<SceneView> {
         if (
           overtoppingEventActive &&
           !downstreamTraceStarted &&
-          damBarrier &&
+          frozenDam &&
           !peakStable &&
           downstream
         ) {
@@ -563,10 +573,10 @@ export async function createScene(container: string): Promise<SceneView> {
             overtoppingPeakHeight - state.freeboard,
             0
           );
-          const measuredWidth = damBarrier
+          const measuredWidth = frozenDam
             ? Math.hypot(
-                damBarrier.end.x - damBarrier.start.x,
-                damBarrier.end.y - damBarrier.start.y
+                frozenDam.end.x - frozenDam.start.x,
+                frozenDam.end.y - frozenDam.start.y
               ) * overtoppingPeakWidthFraction
             : 0;
           downstream.textContent =
@@ -579,7 +589,7 @@ export async function createScene(container: string): Promise<SceneView> {
           peakStable &&
           overtoppingPeakSourceT !== null &&
           !downstreamTraceStarted &&
-          damBarrier
+          frozenDam
         ) {
           downstreamTraceStarted = true;
           const traceGeneration = ++downstreamTraceGeneration;
@@ -590,18 +600,18 @@ export async function createScene(container: string): Promise<SceneView> {
 
           const source = new Point({
             x:
-              damBarrier.start.x +
-              (damBarrier.end.x - damBarrier.start.x) * overtoppingPeakSourceT,
+              frozenDam.start.x +
+              (frozenDam.end.x - frozenDam.start.x) * overtoppingPeakSourceT,
             y:
-              damBarrier.start.y +
-              (damBarrier.end.y - damBarrier.start.y) * overtoppingPeakSourceT,
+              frozenDam.start.y +
+              (frozenDam.end.y - frozenDam.start.y) * overtoppingPeakSourceT,
             z: basin.damCrestElevation,
-            spatialReference: damBarrier.start.spatialReference
+            spatialReference: frozenDam.start.spatialReference
           });
 
           void traceDownstreamFlow(
             view,
-            damBarrier,
+            frozenDam,
             basin.center,
             source
           )
@@ -663,7 +673,7 @@ export async function createScene(container: string): Promise<SceneView> {
                   | null = null;
 
                 try {
-                  const activeDam = damBarrier;
+                  const activeDam = frozenDam;
                   if (!activeDam) {
                     throw new Error(
                       "Dam barrier is no longer available for downstream simulation."
@@ -1138,15 +1148,15 @@ export async function createScene(container: string): Promise<SceneView> {
     damPreviewGraphic = null;
     damGroundPreviewGraphic = null;
 
-    if (!damBarrier) {
+    if (!frozenDam) {
       return;
     }
 
     const damLine = new Polyline({
       spatialReference: view.spatialReference,
       paths: [[
-        [damBarrier.start.x, damBarrier.start.y, damBarrier.start.z ?? 0],
-        [damBarrier.end.x, damBarrier.end.y, damBarrier.end.z ?? 0]
+        [frozenDam.start.x, frozenDam.start.y, frozenDam.start.z ?? 0],
+        [frozenDam.end.x, frozenDam.end.y, frozenDam.end.z ?? 0]
       ]]
     });
 
@@ -1174,10 +1184,10 @@ export async function createScene(container: string): Promise<SceneView> {
         tilt: camera.tilt
       },
       settings: { ...settings },
-      dam: damBarrier
+      dam: frozenDam
         ? {
-            start: toScenarioPoint(damBarrier.start),
-            end: toScenarioPoint(damBarrier.end)
+            start: toScenarioPoint(frozenDam.start),
+            end: toScenarioPoint(frozenDam.end)
           }
         : null,
       basin:
@@ -1227,7 +1237,7 @@ export async function createScene(container: string): Promise<SceneView> {
     }
 
     damStart = null;
-    damBarrier = scenario.dam
+    frozenDam = scenario.dam
       ? {
           start: fromScenarioPoint(scenario.dam.start),
           end: fromScenarioPoint(scenario.dam.end)
@@ -1250,7 +1260,7 @@ export async function createScene(container: string): Promise<SceneView> {
       { animate: false }
     );
 
-    if (damBarrier && lastBasinSeed && lastBasinSource) {
+    if (frozenDam && lastBasinSeed && lastBasinSource) {
       await applyBasin(lastBasinSeed, lastBasinSource);
       writeStatus("Scenario loaded. Reservoir regenerated from saved JSON.");
     } else {
@@ -1685,10 +1695,16 @@ export async function createScene(container: string): Promise<SceneView> {
           "GeoDynamics is trying to determine the upstream side and generate the reservoir automatically."
         );
 
+        const basinSetupDam: DamBarrier = {
+          start: damBarrier.start.clone(),
+          end: damBarrier.end.clone()
+        };
+        const basinSetupSettings: SimulationSettings = { ...settings };
+
         const automaticSeed = await findAutomaticBasinSeed(
           view,
-          damBarrier,
-          settings
+          basinSetupDam,
+          basinSetupSettings
         );
 
         if (automaticSeed) {
