@@ -2,7 +2,7 @@ import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 import RenderNode from "@arcgis/core/views/3d/webgl/RenderNode";
 import * as webgl from "@arcgis/core/views/3d/webgl";
-import { Matrix4 } from "three";
+import { Matrix4, Vector3 } from "three";
 
 const WATER_TEXTURE_SIZE = 128;
 const WATER_GRID_RESOLUTION = 128;
@@ -74,6 +74,7 @@ type WaterNodeInternal = RenderNode & {
   addImpact(point: Point, speed: number): void;
   getSurface(): { center: Point; size: number; elevation: number } | null;
   resetDynamics(): void;
+  clearBasin(): void;
   ensureResources(): void;
   rebuildMesh(): void;
   uploadBasinMask(): void;
@@ -222,16 +223,13 @@ function createWaterMesh(
   center: Point,
   size: number,
   elevation: number,
-  renderOrigin: ArrayLike<number>
+  localToRender: ArrayLike<number>
 ): Float32Array {
   const half = size / 2;
   const cells = WATER_GRID_RESOLUTION;
   const gridSize = cells + 1;
   const gridVertexCount = gridSize * gridSize;
-  const baseSource = new Float64Array(gridVertexCount * 3);
-  const upSource = new Float64Array(gridVertexCount * 3);
-  const eastSource = new Float64Array(gridVertexCount * 3);
-  const northSource = new Float64Array(gridVertexCount * 3);
+  const source = new Float64Array(gridVertexCount * 3);
 
   for (let row = 0; row < gridSize; row += 1) {
     const v = row / cells;
@@ -241,113 +239,69 @@ function createWaterMesh(
       const u = col / cells;
       const x = center.x - half + u * size;
       const index = (row * gridSize + col) * 3;
-
-      baseSource[index] = x;
-      baseSource[index + 1] = y;
-      baseSource[index + 2] = elevation;
-
-      upSource[index] = x;
-      upSource[index + 1] = y;
-      upSource[index + 2] = elevation + 1;
-
-      eastSource[index] = x + 1;
-      eastSource[index + 1] = y;
-      eastSource[index + 2] = elevation;
-
-      northSource[index] = x;
-      northSource[index + 1] = y + 1;
-      northSource[index + 2] = elevation;
+      source[index] = x;
+      source[index + 1] = y;
+      source[index + 2] = elevation;
     }
   }
 
-  const baseRender = new Float64Array(gridVertexCount * 3);
-  const upRender = new Float64Array(gridVertexCount * 3);
-  const eastRender = new Float64Array(gridVertexCount * 3);
-  const northRender = new Float64Array(gridVertexCount * 3);
-
-  const spatialReference = center.spatialReference;
-  const transformedBase = webgl.toRenderCoordinates(
+  const render = new Float64Array(gridVertexCount * 3);
+  const transformed = webgl.toRenderCoordinates(
     view,
-    baseSource,
+    source,
     0,
-    spatialReference,
-    baseRender,
-    0,
-    gridVertexCount
-  );
-  const transformedUp = webgl.toRenderCoordinates(
-    view,
-    upSource,
-    0,
-    spatialReference,
-    upRender,
-    0,
-    gridVertexCount
-  );
-  const transformedEast = webgl.toRenderCoordinates(
-    view,
-    eastSource,
-    0,
-    spatialReference,
-    eastRender,
-    0,
-    gridVertexCount
-  );
-  const transformedNorth = webgl.toRenderCoordinates(
-    view,
-    northSource,
-    0,
-    spatialReference,
-    northRender,
+    center.spatialReference,
+    render,
     0,
     gridVertexCount
   );
 
-  if (
-    !transformedBase ||
-    !transformedUp ||
-    !transformedEast ||
-    !transformedNorth
-  ) {
+  if (!transformed) {
     throw new Error("Unable to transform water mesh into ArcGIS render coordinates.");
   }
 
-  // position.xyz + uv + localUp.xyz + localEast.xyz + localNorth.xyz
+  const renderToLocal = new Matrix4()
+    .fromArray(Array.from(localToRender))
+    .invert();
+  const local = new Float64Array(gridVertexCount * 3);
+  const point = new Vector3();
+
+  for (let i = 0; i < gridVertexCount; i += 1) {
+    const index = i * 3;
+    point
+      .set(render[index], render[index + 1], render[index + 2])
+      .applyMatrix4(renderToLocal);
+    local[index] = point.x;
+    local[index + 1] = point.y;
+    local[index + 2] = point.z;
+  }
+
   const floatsPerVertex = 14;
-  const data = new Float32Array(
-    cells * cells * 6 * floatsPerVertex
-  );
+  const data = new Float32Array(cells * cells * 6 * floatsPerVertex);
   let offset = 0;
-
-  const writeDirection = (
-    from: Float64Array,
-    to: Float64Array,
-    index: number
-  ) => {
-    const x = to[index] - from[index];
-    const y = to[index + 1] - from[index + 1];
-    const z = to[index + 2] - from[index + 2];
-    const length = Math.hypot(x, y, z) || 1;
-
-    data[offset++] = x / length;
-    data[offset++] = y / length;
-    data[offset++] = z / length;
-  };
 
   const writeVertex = (col: number, row: number) => {
     const u = col / cells;
     const v = row / cells;
     const index = (row * gridSize + col) * 3;
 
-    data[offset++] = baseRender[index] - renderOrigin[0];
-    data[offset++] = baseRender[index + 1] - renderOrigin[1];
-    data[offset++] = baseRender[index + 2] - renderOrigin[2];
+    data[offset++] = local[index];
+    data[offset++] = local[index + 1];
+    data[offset++] = local[index + 2];
     data[offset++] = u;
     data[offset++] = v;
 
-    writeDirection(baseRender, upRender, index);
-    writeDirection(baseRender, eastRender, index);
-    writeDirection(baseRender, northRender, index);
+    data[offset++] = 0;
+    data[offset++] = 0;
+    data[offset++] = 1;
+
+    data[offset++] = 1;
+    data[offset++] = 0;
+    data[offset++] = 0;
+
+    data[offset++] = 0;
+    data[offset++] = 1;
+    data[offset++] = 0;
   };
 
   for (let row = 0; row < cells; row += 1) {
@@ -473,26 +427,48 @@ const renderVertexSource = `#version 300 es
   uniform mat4 uProjection;
   uniform mat4 uModelView;
   uniform vec2 uTexel;
+  uniform float uTime;
 
   out float vHeight;
+  out float vSurfaceMotion;
   out vec2 vUv;
   out vec3 vNormal;
 
+  float ambientWave(vec2 uv, float t) {
+    float w1 = sin(dot(uv, vec2(37.0, 21.0)) + t * 0.00115);
+    float w2 = sin(dot(uv, vec2(-18.0, 43.0)) - t * 0.00082 + 1.7);
+    float w3 = sin(dot(uv, vec2(71.0, -29.0)) + t * 0.00155 + 0.6);
+    return w1 * 0.50 + w2 * 0.32 + w3 * 0.18;
+  }
+
   void main() {
     float height = texture(uState, aUv).r;
+    float wet = texture(uMask, aUv).r;
     vUv = aUv;
+
     float left = texture(uState, aUv - vec2(uTexel.x, 0.0)).r;
     float right = texture(uState, aUv + vec2(uTexel.x, 0.0)).r;
     float down = texture(uState, aUv - vec2(0.0, uTexel.y)).r;
     float up = texture(uState, aUv + vec2(0.0, uTexel.y)).r;
 
-    vec3 p = aPosition + aUp * height;
-    vHeight = height;
+    // Purely visual background motion. Physics/overtopping still use only
+    // the simulated state texture, so this never changes hydraulic results.
+    float ambient = wet > 0.5 ? ambientWave(aUv, uTime) * 0.035 : 0.0;
+    float visualHeight = height + ambient;
 
-    // The water grid is stored in ArcGIS render coordinates. Perturb the
-    // geographic up-vector with the local east/north wave gradient so the
-    // shading stays correct even in global SceneView/ECEF coordinates.
-    vec2 slope = vec2(left - right, down - up) * 3.2;
+    vec3 p = aPosition + aUp * visualHeight;
+    vHeight = height;
+    vSurfaceMotion = ambient;
+
+    // Blend physical wave slope with small procedural surface ripples.
+    vec2 physicalSlope = vec2(left - right, down - up) * 5.4;
+    float phaseA = dot(aUv, vec2(37.0, 21.0)) + uTime * 0.00115;
+    float phaseB = dot(aUv, vec2(-18.0, 43.0)) - uTime * 0.00082 + 1.7;
+    vec2 ambientSlope =
+      vec2(cos(phaseA) * 37.0, cos(phaseA) * 21.0) * 0.0022 +
+      vec2(cos(phaseB) * -18.0, cos(phaseB) * 43.0) * 0.0015;
+
+    vec2 slope = physicalSlope + ambientSlope;
     vNormal = normalize(
       aUp +
       aEast * slope.x +
@@ -511,6 +487,7 @@ const renderFragmentSource = `#version 300 es
   uniform float uTime;
 
   in float vHeight;
+  in float vSurfaceMotion;
   in vec2 vUv;
   in vec3 vNormal;
   out vec4 fragColor;
@@ -529,7 +506,7 @@ const renderFragmentSource = `#version 300 es
     vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
 
     float diffuse = max(dot(normal, lightDirection), 0.0);
-    float specular = pow(max(dot(normal, halfVector), 0.0), 42.0);
+    float specular = pow(max(dot(normal, halfVector), 0.0), 96.0);
     float slope = clamp(length(normal.xy) * 1.8, 0.0, 1.0);
     float basinDepth = max(texture(uDepth, vUv).r, 0.0);
 
@@ -537,17 +514,24 @@ const renderFragmentSource = `#version 300 es
     // It is intentionally subtle because ArcGIS still owns the scene
     // illumination and render target.
     float facing = clamp(abs(normal.z), 0.0, 1.0);
-    float fresnel = pow(1.0 - facing, 3.0);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - facing, 5.0);
 
     // Procedural micro-ripples add small-scale variation without introducing
     // external texture assets or another renderer/context.
     float rippleA = sin(vUv.x * 190.0 + uTime * 0.0017);
     float rippleB = sin(vUv.y * 157.0 - uTime * 0.0013);
-    float microRipple = (rippleA + rippleB) * 0.5;
+    float rippleC = sin((vUv.x + vUv.y) * 113.0 + uTime * 0.0011);
+    float rippleD = sin((vUv.x * 0.73 - vUv.y) * 247.0 - uTime * 0.0015);
+    float microRipple =
+      rippleA * 0.34 +
+      rippleB * 0.28 +
+      rippleC * 0.22 +
+      rippleD * 0.16;
 
-    vec3 shallowColor = vec3(0.055, 0.34, 0.40);
-    vec3 deepColor = vec3(0.012, 0.075, 0.16);
-    vec3 crestColor = vec3(0.46, 0.82, 0.86);
+    vec3 shallowColor = vec3(0.035, 0.27, 0.33);
+    vec3 deepColor = vec3(0.010, 0.055, 0.12);
+    vec3 crestColor = vec3(0.34, 0.68, 0.76);
+    vec3 reflectionColor = vec3(0.34, 0.47, 0.58);
 
     float depthMix = smoothstep(0.5, 18.0, basinDepth);
     vec3 color = mix(shallowColor, deepColor, depthMix);
@@ -565,16 +549,18 @@ const renderFragmentSource = `#version 300 es
     float crestFoam = positiveCrest * smoothstep(0.08, 0.42, slope);
     float foam = clamp(shorelineFoam + crestFoam, 0.0, 1.0);
 
-    color += slope * vec3(0.035, 0.075, 0.09);
-    color += microRipple * 0.018;
-    color *= 0.76 + diffuse * 0.34;
-    color += specular * vec3(0.72, 0.86, 0.92);
-    color = mix(color, vec3(0.82, 0.93, 0.94), foam * 0.72);
-    color = mix(color, vec3(0.16, 0.34, 0.44), fresnel * 0.28);
+    color += slope * vec3(0.018, 0.042, 0.055);
+    color += microRipple * 0.005;
+    color += vSurfaceMotion * vec3(0.004, 0.009, 0.012);
+    color *= 0.80 + diffuse * 0.24;
+    color += specular * 0.34 * vec3(0.78, 0.88, 0.94);
+    color = mix(color, vec3(0.78, 0.90, 0.92), foam * 0.68);
+    color = mix(color, reflectionColor, fresnel * 0.46);
 
     float alpha =
-      mix(0.66, 0.90, smoothstep(0.2, 12.0, basinDepth)) +
-      foam * 0.06;
+      mix(0.58, 0.86, smoothstep(0.2, 12.0, basinDepth)) +
+      foam * 0.08 +
+      fresnel * 0.055;
     fragColor = vec4(color, clamp(alpha, 0.62, 0.94));
   }
 `;
@@ -637,32 +623,21 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.overtoppingCallback = null;
     this.lastOvertoppingRead = 0;
 
-    const renderOrigin = new Float64Array(3);
-    const transformedOrigin = webgl.toRenderCoordinates(
+    const transform = webgl.renderCoordinateTransformAt(
       this.view,
       [center.x, center.y, elevation],
-      0,
       center.spatialReference,
-      renderOrigin,
-      0,
-      1
+      new Float64Array(16)
     );
 
-    if (!transformedOrigin) {
+    if (!transform) {
       this.waterTransform = null;
       throw new Error(
-        "Unable to transform the reservoir origin into ArcGIS render coordinates."
+        "Unable to create the reservoir local render transform."
       );
     }
 
-    // Keep vertex coordinates close to zero for WebGL precision. The mesh is
-    // generated from exact GIS positions and stored relative to this origin.
-    this.waterTransform = new Float64Array([
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 1, 0,
-      renderOrigin[0], renderOrigin[1], renderOrigin[2], 1
-    ]);
+    this.waterTransform = new Float64Array(transform);
     this.pendingImpact = null;
 
     if (this.initializedResources) {
@@ -787,6 +762,18 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
     this.requestRender();
   },
 
+  clearBasin(this: WaterNodeInternal) {
+    this.center = null;
+    this.surfaceElevation = null;
+    this.basinMask = null;
+    this.basinDepth = null;
+    this.damSamples = [];
+    this.overtoppingCallback = null;
+    this.pendingImpact = null;
+    this.lastOvertoppingRead = 0;
+    this.requestRender();
+  },
+
   ensureResources(this: WaterNodeInternal) {
     if (this.initializedResources) {
       return;
@@ -862,17 +849,12 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       return;
     }
 
-    const renderOrigin = [
-      this.waterTransform[12],
-      this.waterTransform[13],
-      this.waterTransform[14]
-    ];
     const mesh = createWaterMesh(
       this.view,
       this.center,
       this.size,
       this.surfaceElevation,
-      renderOrigin
+      this.waterTransform
     );
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuffer);
@@ -893,6 +875,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       new Uint8Array(resolution * resolution).fill(255);
 
     gl.bindTexture(gl.TEXTURE_2D, this.maskTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
@@ -918,6 +902,8 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       new Float32Array(resolution * resolution);
 
     gl.bindTexture(gl.TEXTURE_2D, this.depthTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
@@ -1272,8 +1258,32 @@ const WaterRenderNodeClass = RenderNode.createSubclass({
       this.gl.getParameter(this.gl.VIEWPORT) as Int32Array
     );
 
-    if (!this.waterTransform) {
+    if (!this.center || this.surfaceElevation === null) {
       return output;
+    }
+
+    const transform = webgl.renderCoordinateTransformAt(
+      this.view,
+      [this.center.x, this.center.y, this.surfaceElevation],
+      this.center.spatialReference,
+      new Float64Array(16)
+    );
+    if (!transform) {
+      return output;
+    }
+
+    const transformChanged =
+      !this.waterTransform ||
+      transform.some(
+        (value, index) =>
+          Math.abs(value - (this.waterTransform?.[index] ?? Number.NaN)) > 1e-6
+      );
+
+    if (transformChanged) {
+      this.waterTransform = new Float64Array(transform);
+      if (this.initializedResources) {
+        this.rebuildMesh();
+      }
     }
 
     this.ensureResources();
