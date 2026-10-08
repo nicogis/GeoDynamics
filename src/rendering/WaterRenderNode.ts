@@ -506,7 +506,7 @@ const renderFragmentSource = `#version 300 es
     vec3 halfVector = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
 
     float diffuse = max(dot(normal, lightDirection), 0.0);
-    float specular = pow(max(dot(normal, halfVector), 0.0), 42.0);
+    float specular = pow(max(dot(normal, halfVector), 0.0), 72.0);
     float slope = clamp(length(normal.xy) * 1.8, 0.0, 1.0);
     float basinDepth = max(texture(uDepth, vUv).r, 0.0);
 
@@ -521,14 +521,12 @@ const renderFragmentSource = `#version 300 es
     float rippleA = sin(vUv.x * 190.0 + uTime * 0.0017);
     float rippleB = sin(vUv.y * 157.0 - uTime * 0.0013);
     float rippleC = sin((vUv.x + vUv.y) * 113.0 + uTime * 0.0011);
-    float microRipple = rippleA * 0.42 + rippleB * 0.36 + rippleC * 0.22;
-    float movingSheen =
-      0.5 +
-      0.5 * sin(
-        vUv.x * 34.0 -
-        vUv.y * 23.0 +
-        uTime * 0.00125
-      );
+    float rippleD = sin((vUv.x * 0.73 - vUv.y) * 247.0 - uTime * 0.0015);
+    float microRipple =
+      rippleA * 0.34 +
+      rippleB * 0.28 +
+      rippleC * 0.22 +
+      rippleD * 0.16;
 
     vec3 shallowColor = vec3(0.055, 0.34, 0.40);
     vec3 deepColor = vec3(0.012, 0.075, 0.16);
@@ -550,11 +548,11 @@ const renderFragmentSource = `#version 300 es
     float crestFoam = positiveCrest * smoothstep(0.08, 0.42, slope);
     float foam = clamp(shorelineFoam + crestFoam, 0.0, 1.0);
 
-    color += slope * vec3(0.035, 0.075, 0.09);
-    color += microRipple * 0.022;
-    color += vSurfaceMotion * vec3(0.025, 0.055, 0.070);
-    color *= 0.74 + diffuse * 0.36;
-    color += specular * (0.72 + movingSheen * 0.22) * vec3(0.72, 0.86, 0.92);
+    color += slope * vec3(0.028, 0.060, 0.075);
+    color += microRipple * 0.010;
+    color += vSurfaceMotion * vec3(0.010, 0.022, 0.030);
+    color *= 0.78 + diffuse * 0.30;
+    color += specular * 0.42 * vec3(0.72, 0.86, 0.92);
     color = mix(color, vec3(0.82, 0.93, 0.94), foam * 0.72);
     color = mix(color, vec3(0.16, 0.34, 0.44), fresnel * 0.28);
 
