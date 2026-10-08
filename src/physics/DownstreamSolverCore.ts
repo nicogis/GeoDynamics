@@ -241,3 +241,28 @@ export function auditMassBalance(
     errorPct
   };
 }
+
+
+export function triangularHydrographFactor(
+  timeS: number,
+  durationS: number,
+  peakPhase = 0.35
+): number {
+  if (durationS <= 0 || timeS < 0 || timeS > durationS) {
+    return 0;
+  }
+
+  const phase = timeS / durationS;
+  const clampedPeak = Math.min(Math.max(peakPhase, 0.001), 0.999);
+
+  return phase <= clampedPeak
+    ? phase / clampedPeak
+    : Math.max(1 - (phase - clampedPeak) / (1 - clampedPeak), 0);
+}
+
+export function expectedTriangularHydrographVolumeM3(
+  peakDischargeM3s: number,
+  durationS: number
+): number {
+  return Math.max(peakDischargeM3s, 0) * Math.max(durationS, 0) * 0.5;
+}
