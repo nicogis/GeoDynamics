@@ -3,6 +3,13 @@ import Point from "@arcgis/core/geometry/Point";
 import SceneView from "@arcgis/core/views/SceneView";
 
 import type { DownstreamFlowPath } from "./DownstreamInundation";
+import {
+  advanceConservativeFlowStep,
+  auditMassBalance,
+  drainOutletBoundary,
+  type ConservativeFlowStepOptions,
+  type OutletEdge
+} from "./DownstreamSolverCore";
 
 export interface DownstreamShallowWaterResult {
   center: Point;
@@ -246,16 +253,15 @@ async function simulateDownstreamShallowWaterAttempt(
   outletDistances.sort((a, b) => a.distance - b.distance);
   const outletEdge = outletDistances[0].edge;
 
-  const neighbors = [
-    [-1, 0, 1],
-    [1, 0, 1],
-    [0, -1, 1],
-    [0, 1, 1],
-    [-1, -1, Math.SQRT2],
-    [-1, 1, Math.SQRT2],
-    [1, -1, Math.SQRT2],
-    [1, 1, Math.SQRT2]
-  ] as const;
+  const flowStepOptions: ConservativeFlowStepOptions = {
+    resolutionX,
+    resolutionY,
+    cellSize,
+    dtSeconds,
+    gravity: GRAVITY,
+    manningN: MANNING_N,
+    minWetDepthM: MIN_WET_DEPTH_M
+  };
 
   let simulatedDurationS = 0;
   let stopReason: DownstreamShallowWaterResult["stopReason"] = "duration-limit";
@@ -298,147 +304,26 @@ async function simulateDownstreamShallowWaterAttempt(
       inputVolumeM3 += injectedVolumeM3;
     }
 
-    nextDepth.set(depth);
+    advanceConservativeFlowStep(
+      depth,
+      nextDepth,
+      terrain,
+      maxVelocity,
+      flowStepOptions
+    );
 
-    for (let row = 1; row < resolutionY - 1; row += 1) {
-      for (let col = 1; col < resolutionX - 1; col += 1) {
-        const index = indexOf(row, col, resolutionX);
-        const localDepth = depth[index];
-        const localTerrain = terrain[index];
-
-        if (
-          !Number.isFinite(localTerrain) ||
-          localDepth <= MIN_WET_DEPTH_M
-        ) {
-          continue;
-        }
-
-        const localSurface = localTerrain + localDepth;
-        let available = localDepth * 0.55;
-
-        for (const [dr, dc, distanceFactor] of neighbors) {
-          if (available <= 0) {
-            break;
-          }
-
-          const neighborIndex = indexOf(
-            row + dr,
-            col + dc,
-            resolutionX
-          );
-          const neighborTerrain = terrain[neighborIndex];
-
-          if (!Number.isFinite(neighborTerrain)) {
-            continue;
-          }
-
-          const neighborSurface =
-            neighborTerrain + depth[neighborIndex];
-          const headDifference = localSurface - neighborSurface;
-
-          if (headDifference <= 0.002) {
-            continue;
-          }
-
-          const hydraulicDepth = Math.max(localDepth, MIN_WET_DEPTH_M);
-          const waveCelerity = Math.sqrt(GRAVITY * hydraulicDepth);
-          const neighborDistance = cellSize * distanceFactor;
-          const slope = Math.min(
-            Math.max(headDifference / neighborDistance, 0),
-            1
-          );
-
-          // Kinematic-wave velocity using Manning friction. This is still a
-          // reduced-order raster solver rather than a full momentum-equation
-          // SWE implementation, but velocity now responds to roughness,
-          // hydraulic depth and slope instead of being derived only from
-          // gravity-wave celerity.
-          const manningVelocity =
-            slope > 0
-              ? (1 / MANNING_N) *
-                Math.pow(hydraulicDepth, 2 / 3) *
-                Math.sqrt(slope)
-              : 0;
-          const velocity = Math.min(
-            manningVelocity,
-            waveCelerity * 2.5,
-            15
-          );
-          const courantNumber = Math.min(
-            velocity * dtSeconds / neighborDistance,
-            0.45
-          );
-          const courantTransfer = Math.min(
-            available,
-            courantNumber * localDepth * 0.42,
-            headDifference * 0.24
-          );
-
-          if (courantTransfer <= 0) {
-            continue;
-          }
-
-          nextDepth[index] -= courantTransfer;
-          nextDepth[neighborIndex] += courantTransfer;
-          available -= courantTransfer;
-          maxVelocity[index] = Math.max(maxVelocity[index], velocity);
-          maxVelocity[neighborIndex] = Math.max(
-            maxVelocity[neighborIndex],
-            velocity
-          );
-        }
-      }
-    }
-
-    // Open downstream/domain boundary. Water reaching the raster edge is
-    // allowed to leave instead of reflecting back and accumulating in closed
-    // edge cells. Track the removed volume for the mass balance.
-    for (let row = 0; row < resolutionY; row += 1) {
-      for (let col = 0; col < resolutionX; col += 1) {
-        if (
-          row !== 0 &&
-          row !== resolutionY - 1 &&
-          col !== 0 &&
-          col !== resolutionX - 1
-        ) {
-          continue;
-        }
-
-        const boundaryIndex = indexOf(row, col, resolutionX);
-        const boundaryDepth = nextDepth[boundaryIndex];
-        if (
-          !Number.isFinite(terrain[boundaryIndex]) ||
-          boundaryDepth <= MIN_WET_DEPTH_M
-        ) {
-          continue;
-        }
-
-        const isOutletCell =
-          (outletEdge === "left" && col === 0) ||
-          (outletEdge === "right" && col === resolutionX - 1) ||
-          (outletEdge === "bottom" && row === 0) ||
-          (outletEdge === "top" && row === resolutionY - 1);
-
-        if (!isOutletCell) {
-          // Reaching a lateral/upstream edge means the computational domain
-          // is too small for the current event. Keep the water in-domain for
-          // mass accounting and stop at the next block boundary.
-          boundaryReached = true;
-          continue;
-        }
-
-        const celerity = Math.sqrt(
-          GRAVITY * Math.max(boundaryDepth, MIN_WET_DEPTH_M)
-        );
-        const drainFraction = Math.min(
-          celerity * dtSeconds / cellSize,
-          0.65
-        );
-        const drainedDepth = boundaryDepth * drainFraction;
-        nextDepth[boundaryIndex] -= drainedDepth;
-        outflowVolumeM3 += drainedDepth * cellAreaM2;
-      }
-    }
+    // Open downstream/domain boundary. Water reaching the selected outlet
+    // edge can leave the raster; lateral/upstream edge contact instead marks
+    // the domain for adaptive expansion.
+    const boundaryDrain = drainOutletBoundary(
+      nextDepth,
+      terrain,
+      flowStepOptions,
+      outletEdge as OutletEdge
+    );
+    outflowVolumeM3 += boundaryDrain.outflowVolumeM3;
+    boundaryReached =
+      boundaryReached || boundaryDrain.boundaryReached;
 
     const swap = depth;
     depth = nextDepth;
@@ -577,17 +462,14 @@ async function simulateDownstreamShallowWaterAttempt(
     }
   }
 
-  let storedVolumeM3 = 0;
-  for (let i = 0; i < count; i += 1) {
-    storedVolumeM3 += Math.max(depth[i], 0) * cellAreaM2;
-  }
-
-  const balanceResidualM3 =
-    inputVolumeM3 - outflowVolumeM3 - storedVolumeM3;
-  const massBalanceErrorPct =
-    inputVolumeM3 > 0
-      ? Math.abs(balanceResidualM3) / inputVolumeM3 * 100
-      : 0;
+  const massAudit = auditMassBalance(
+    inputVolumeM3,
+    outflowVolumeM3,
+    depth,
+    cellAreaM2
+  );
+  const storedVolumeM3 = massAudit.storedVolumeM3;
+  const massBalanceErrorPct = massAudit.errorPct;
 
   if (boundaryReached && stopReason !== "domain-boundary-reached") {
     stopReason = "domain-boundary-reached";
