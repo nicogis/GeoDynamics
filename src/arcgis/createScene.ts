@@ -864,51 +864,10 @@ export async function createScene(container: string): Promise<SceneView> {
         })
       ];
 
-      // Darker upstream wetting band gives the wall a visible waterline and
-      // makes the barrier read as a concrete structure rather than a flat
-      // brown polygon.
-      const wetProfile = profile.filter(
-        (pointOnTerrain) =>
-          pointOnTerrain[2] <= basin.waterElevation
-      );
-
-      if (wetProfile.length >= 2) {
-        const wetRing: number[][] = [
-          basin.waterLevelStart,
-          ...wetProfile.map((pointOnTerrain) => [
-            pointOnTerrain[0],
-            pointOnTerrain[1],
-            basin.waterElevation
-          ]),
-          basin.waterLevelEnd,
-          ...[...wetProfile]
-            .reverse()
-            .map((pointOnTerrain) => [
-              pointOnTerrain[0],
-              pointOnTerrain[1],
-              pointOnTerrain[2]
-            ]),
-          basin.waterLevelStart
-        ];
-
-        damGraphics.push(
-          new Graphic({
-            geometry: new Polygon({
-              spatialReference: view.spatialReference,
-              rings: [wetRing]
-            }),
-            symbol: new PolygonSymbol3D({
-              symbolLayers: [
-                new FillSymbol3DLayer({
-                  material: {
-                    color: [70, 88, 92, 0.82]
-                  }
-                })
-              ]
-            })
-          })
-        );
-      }
+      // Keep the face single-surface. Coplanar wet-band polygons and a second
+      // crest polyline caused visible z-fighting against the dam body and the
+      // interactive orange crest. The existing water-level line communicates
+      // wetting without introducing overlapping geometry.
 
       // Subtle vertical construction joints provide scale and a concrete-panel
       // appearance while keeping the dam geometry tied to the sampled terrain.
@@ -923,36 +882,17 @@ export async function createScene(container: string): Promise<SceneView> {
             geometry: new Polyline({
               spatialReference: view.spatialReference,
               paths: [[
-                [p[0], p[1], p[2]],
-                [p[0], p[1], crestElevation]
+                [p[0], p[1], p[2] + 0.05],
+                [p[0], p[1], crestElevation - 0.05]
               ]]
             }),
             symbol: new SimpleLineSymbol({
-              color: [72, 74, 73, 0.52],
+              color: [72, 74, 73, 0.42],
               width: 1
             })
           })
         );
       }
-
-      damGraphics.push(
-        new Graphic({
-          geometry: new Polyline({
-            spatialReference: view.spatialReference,
-            paths: [[
-              ...profile.map((p) => [
-                p[0],
-                p[1],
-                crestElevation
-              ])
-            ]]
-          }),
-          symbol: new SimpleLineSymbol({
-            color: [205, 202, 193, 0.96],
-            width: 3
-          })
-        })
-      );
 
       damFaceLayer.addMany(damGraphics);
 
